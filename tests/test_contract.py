@@ -4,6 +4,8 @@ Written without reading pyHM310T.py — a failure here means the implementation
 disagrees with the documented contract, not that the test is wrong.
 """
 
+import pytest
+
 
 def test_comm_address_is_in_documented_range(power_supply):
     # README: get_comm_address() "Returns an integer value between 1 and 250."
@@ -32,3 +34,34 @@ def test_display_reads_are_non_negative_numbers(power_supply):
     for value in (voltage, current, power):
         assert isinstance(value, (int, float))
         assert value >= 0
+
+
+def test_set_voltage_roundtrip(power_supply):
+    # README: set_voltage(voltage) "should be a float value between 0 and 30
+    # (or set limit)"; get_voltage() "Get the set output voltage."
+    power_supply.set_voltage(2.0)
+    assert power_supply.get_voltage() == pytest.approx(2.0, abs=0.1)
+
+
+def test_set_current_roundtrip(power_supply):
+    # README: set_current(current) "between 0 and 10 (or set limit)".
+    power_supply.set_current(0.5)
+    assert power_supply.get_current() == pytest.approx(0.5, abs=0.05)
+
+
+def test_set_ovp_roundtrip(power_supply):
+    # README: set_ovp(ovp) "should be a float value between 0 and 30."
+    power_supply.set_ovp(10.0)
+    assert power_supply.get_ovp() == pytest.approx(10.0, abs=0.1)
+
+
+def test_set_ocp_roundtrip(power_supply):
+    # README: set_ocp(ocp) "should be a float value between 0 and 10."
+    power_supply.set_ocp(2.0)
+    assert power_supply.get_ocp() == pytest.approx(2.0, abs=0.05)
+
+
+def test_set_opp_roundtrip(power_supply):
+    # README: set_opp(opp) "should be a float value between 0 and 300."
+    power_supply.set_opp(20.0)
+    assert power_supply.get_opp() == pytest.approx(20.0, abs=1.0)
