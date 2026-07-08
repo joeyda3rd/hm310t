@@ -65,3 +65,38 @@ def test_set_opp_roundtrip(power_supply):
     # README: set_opp(opp) "should be a float value between 0 and 300."
     power_supply.set_opp(20.0)
     assert power_supply.get_opp() == pytest.approx(20.0, abs=1.0)
+
+
+def test_voltage_above_documented_limit_is_rejected_or_clamped(power_supply):
+    # README says the documented range is 0-30 (or configured limit). Output
+    # stays disabled throughout, so no current can flow regardless of what
+    # the setpoint register ends up holding -- this only probes whether the
+    # library enforces its own documented range.
+    try:
+        power_supply.set_voltage(31.0)
+    except (ValueError, Exception):
+        return  # rejecting out-of-range input satisfies the documented contract
+    assert power_supply.get_voltage() <= 30.0, (
+        "set_voltage(31.0) was accepted without error and without being "
+        "clamped to the documented 0-30 range"
+    )
+
+
+def test_voltage_below_zero_is_rejected_or_clamped(power_supply):
+    try:
+        power_supply.set_voltage(-1.0)
+    except (ValueError, Exception):
+        return
+    assert power_supply.get_voltage() >= 0.0, (
+        "set_voltage(-1.0) was accepted without error and without being "
+        "clamped to the documented 0-30 range"
+    )
+
+
+def test_invalid_port_raises_communication_error():
+    # README's Usage example implies a bad/unreachable port should fail
+    # loudly rather than hang or raise something unrelated.
+    from pyHM310T import PowerSupply, PowerSupplyCommunicationError
+
+    with pytest.raises(PowerSupplyCommunicationError):
+        PowerSupply(port="/dev/ttyUSB99")
