@@ -100,3 +100,17 @@ def test_invalid_port_raises_communication_error():
 
     with pytest.raises(PowerSupplyCommunicationError):
         PowerSupply(port="/dev/ttyUSB99")
+
+
+def test_enable_then_disable_output_roundtrip(power_supply):
+    # Safe only because nothing is wired to the output terminals right now
+    # (confirmed before this plan was written). Conservative setpoint first,
+    # and disable_output() runs in a finally so output can never be left on.
+    power_supply.set_voltage(1.0)
+    power_supply.set_current(0.1)
+    try:
+        power_supply.enable_output()
+        assert power_supply.is_output_enabled() is True
+    finally:
+        power_supply.disable_output()
+    assert power_supply.is_output_enabled() is False
