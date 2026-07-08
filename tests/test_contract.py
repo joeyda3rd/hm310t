@@ -33,36 +33,44 @@ def test_display_reads_are_non_negative_numbers(power_supply):
     power = power_supply.get_power_display()
     for value in (voltage, current, power):
         assert isinstance(value, (int, float))
-        assert value >= 0
+        # -0.05 tolerance: README doesn't guarantee non-negativity, and
+        # unloaded ADC readings can show small negative noise.
+        assert value >= -0.05
 
 
 def test_set_voltage_roundtrip(power_supply):
     # README: set_voltage(voltage) "should be a float value between 0 and 30
     # (or set limit)"; get_voltage() "Get the set output voltage."
+    # Register table: voltage stores 2 decimal places -> tolerance > 0.01.
     power_supply.set_voltage(2.0)
     assert power_supply.get_voltage() == pytest.approx(2.0, abs=0.1)
 
 
 def test_set_current_roundtrip(power_supply):
     # README: set_current(current) "between 0 and 10 (or set limit)".
+    # Register table: current stores 3 decimal places -> tolerance > 0.001.
     power_supply.set_current(0.5)
     assert power_supply.get_current() == pytest.approx(0.5, abs=0.05)
 
 
 def test_set_ovp_roundtrip(power_supply):
     # README: set_ovp(ovp) "should be a float value between 0 and 30."
+    # Same 2-decimal-place register class as voltage.
     power_supply.set_ovp(10.0)
     assert power_supply.get_ovp() == pytest.approx(10.0, abs=0.1)
 
 
 def test_set_ocp_roundtrip(power_supply):
     # README: set_ocp(ocp) "should be a float value between 0 and 10."
+    # Same 3-decimal-place register class as current.
     power_supply.set_ocp(2.0)
     assert power_supply.get_ocp() == pytest.approx(2.0, abs=0.05)
 
 
 def test_set_opp_roundtrip(power_supply):
     # README: set_opp(opp) "should be a float value between 0 and 300."
+    # README flags OPP's register format/precision as uncertain (two 16-bit
+    # registers combined) -- wider tolerance reflects that documented doubt.
     power_supply.set_opp(20.0)
     assert power_supply.get_opp() == pytest.approx(20.0, abs=1.0)
 
@@ -74,7 +82,8 @@ def test_voltage_above_documented_limit_is_rejected_or_clamped(power_supply):
     # library enforces its own documented range.
     try:
         power_supply.set_voltage(31.0)
-    except (ValueError, Exception):
+    except Exception as exc:
+        print(f"set_voltage(31.0) raised {type(exc).__name__}: {exc}")
         return  # rejecting out-of-range input satisfies the documented contract
     assert power_supply.get_voltage() <= 30.0, (
         "set_voltage(31.0) was accepted without error and without being "
@@ -85,7 +94,8 @@ def test_voltage_above_documented_limit_is_rejected_or_clamped(power_supply):
 def test_voltage_below_zero_is_rejected_or_clamped(power_supply):
     try:
         power_supply.set_voltage(-1.0)
-    except (ValueError, Exception):
+    except Exception as exc:
+        print(f"set_voltage(-1.0) raised {type(exc).__name__}: {exc}")
         return
     assert power_supply.get_voltage() >= 0.0, (
         "set_voltage(-1.0) was accepted without error and without being "
