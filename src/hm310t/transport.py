@@ -47,6 +47,13 @@ class Transport:
                 f"Read of register 0x{address:04X} failed: {response}"
             )
         registers: list[int] = list(response.registers)
+        # A short (but non-error) response must not become an IndexError two layers
+        # up: keep the "all failures are typed" contract at the transport boundary.
+        if len(registers) != count:
+            raise PowerSupplyCommunicationError(
+                f"Read of register 0x{address:04X} returned {len(registers)} "
+                f"register(s), expected {count}"
+            )
         return registers
 
     def read_register(self, address: int) -> int:

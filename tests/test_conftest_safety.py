@@ -49,7 +49,7 @@ def test_managed_supply_forces_off_on_entry_and_restores_output_last(monkeypatch
     assert transport.closed
 
 
-def test_managed_supply_isolates_a_failed_restore_and_still_restores_output(monkeypatch):
+def test_managed_supply_does_not_reenable_output_after_a_failed_restore(monkeypatch):
     class VoltageRestoreFails(FakeTransport):
         def write_register(self, address, value):
             if address == SET_VOLTAGE:
@@ -58,13 +58,17 @@ def test_managed_supply_isolates_a_failed_restore_and_still_restores_output(monk
 
     psu, transport = _build_psu_with_output_on(monkeypatch, VoltageRestoreFails)
 
-    # A setpoint restore blows up, but teardown must isolate it, still re-apply the
-    # output state, close the port, and surface the failure as an AssertionError.
+    # Baseline output was ON, but a setpoint restore fails. Teardown must NOT
+    # re-energize into a degraded state: it leaves the output OFF, closes the port,
+    # and surfaces the failure as an AssertionError (never a silent pass).
     with pytest.raises(AssertionError, match="voltage"):
         with managed_power_supply(psu):
             pass
 
-    assert (OUTPUT, [1]) in transport.write_log  # output restored despite the failure
+    output_writes = [value for addr, value in transport.write_log if addr == OUTPUT]
+    assert (OUTPUT, [1]) not in transport.write_log  # output was NOT re-enabled
+    assert output_writes[-1] == [0]  # teardown left it OFF
+    assert transport.registers[OUTPUT] == 0  # device physically off
     assert transport.closed
 
 
@@ -87,5 +91,6 @@ def test_managed_supply_skips_setpoint_restore_when_teardown_force_off_fails(mon
 
     setpoint_regs = {0x0020, 0x0021, 0x0022, 0x0030, 0x0031}
     assert not any(addr in setpoint_regs for addr, _ in transport.write_log)
-    assert (OUTPUT, [1]) in transport.write_log  # baseline output state still restored
+    assert (OUTPUT, [1]) not in transport.write_log  # output was never re-enabled
+    assert transport.registers[OUTPUT] == 0  # device left physically off
     assert transport.closed

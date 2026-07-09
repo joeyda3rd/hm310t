@@ -307,3 +307,48 @@ def test_setter_write_failure_propagates(psu, fake_transports):
     fake_transports[0].fail_writes = True
     with pytest.raises(PowerSupplyCommunicationError):
         psu.voltage = 5.0
+
+
+def test_numeric_setters_reject_bool_and_non_numbers(psu, fake_transports):
+    # Adversarial review: `psu.voltage = True` passes 0 <= 1 <= 30 and would silently
+    # write 1.00 V. Reject bool and non-numbers on all five numeric setpoints; write nothing.
+    for name in ("voltage", "current", "ovp", "ocp", "opp"):
+        for bad in (True, False, "5", None):
+            with pytest.raises(TypeError):
+                setattr(psu, name, bad)
+    assert fake_transports[0].write_log == []
+
+
+def test_constructor_rejects_invalid_slave(fake_transports):
+    # slave is the Modbus unit id stamped on every frame; slave=0 is broadcast and
+    # slave>250 overflows pymodbus. Validate it like comm_address does.
+    with pytest.raises(OutOfRangeError):
+        PowerSupply(port="fake", slave=0)
+    with pytest.raises(OutOfRangeError):
+        PowerSupply(port="fake", slave=999)
+    with pytest.raises(TypeError):
+        PowerSupply(port="fake", slave=True)
+
+
+def test_exit_disables_output_when_block_raises(fake_transports):
+    # An exception unwinding out of the `with` block is an error path: __exit__ must
+    # fail safe and disable the output (a `with` implies safe teardown on error).
+    with pytest.raises(RuntimeError):
+        with PowerSupply(port="fake") as psu:
+            psu.output_enabled = True
+            raise RuntimeError("boom")
+    transport = fake_transports[0]
+    output_writes = [value for addr, value in transport.write_log if addr == 0x0001]
+    assert output_writes[-1] == [0]  # last output write forced it OFF
+    assert transport.closed
+
+
+def test_exit_leaves_output_untouched_on_clean_exit(fake_transports):
+    # A clean exit honors the "leave the output as you set it" philosophy -- no
+    # implicit output-off write is issued.
+    with PowerSupply(port="fake") as psu:
+        psu.output_enabled = True
+    transport = fake_transports[0]
+    output_writes = [value for addr, value in transport.write_log if addr == 0x0001]
+    assert output_writes == [[1]]  # only the deliberate enable; teardown added nothing
+    assert transport.closed

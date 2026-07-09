@@ -37,11 +37,20 @@ hardware-free unit suite, and a hardware contract suite.
 - Setpoint scaling rounds instead of truncating, fixing off-by-one writes such as
   `0.29 V` (bug #7).
 - Strict-`bool` `output_enabled` setter: assigning a non-`bool` raises `TypeError`
-  rather than coercing (a truthy string could otherwise energize the output).
+  rather than coercing (a truthy string could otherwise energize the output). The
+  numeric setpoint setters (`voltage`, `current`, `ovp`, `ocp`, `opp`) likewise
+  reject `bool` and non-numbers — `psu.voltage = True` no longer silently writes 1 V.
+- The constructor validates `slave` (the Modbus unit id) to 1–250, matching
+  `comm_address`; `slave=0` (broadcast) and out-of-range ids are rejected up front.
+- `__exit__` now disables the output as a fail-safe when the `with` block exits via
+  an exception. A clean exit still leaves the output as set.
+- Minimum pyserial is pinned to `>=3.5` (the proven version).
 
 ### Fixed
 - The serial handle is no longer leaked when connect or post-connect verification
   fails (bug #1).
 - Communication failures raise instead of being swallowed and returning `None`
   (bugs #2, #8).
+- Short or malformed Modbus read responses now raise `PowerSupplyCommunicationError`
+  instead of surfacing as an `IndexError` in the client layer.
 - Dropped the dead `method='rtu'` keyword argument used against pymodbus 3.x.

@@ -59,9 +59,12 @@ def _restore_state(psu: PowerSupply, baseline: dict[str, object]) -> list[str]:
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{name}: {exc!r}")
 
-    # Safety-critical and LAST: re-apply the caller's original output state.
+    # Safety-critical and LAST. NEVER energize into a degraded restore: only turn the
+    # output back ON if every step above succeeded (clean force-off + clean setpoints).
+    # Otherwise force it OFF and let `errors` fail the teardown loudly.
+    want_on = baseline["output_enabled"] is True and not errors
     try:
-        psu.output_enabled = baseline["output_enabled"]
+        psu.output_enabled = want_on
     except Exception as exc:  # noqa: BLE001
         errors.append(f"output-restore: {exc!r}")
 
@@ -76,18 +79,23 @@ def managed_power_supply(psu: PowerSupply) -> Iterator[PowerSupply]:
     connection is closed -- a botched restore must never pass silently on a device
     that sources 300 W.
     """
-    baseline = _snapshot_state(psu)
     try:
+        baseline = _snapshot_state(psu)
         psu.output_enabled = False
     except BaseException:
+        # A failure snapshotting or forcing-off on entry must still close the port.
         psu.close()
         raise
 
     try:
         yield psu
     finally:
-        errors = _restore_state(psu, baseline)
-        psu.close()
+        # close() must run even if _restore_state raises (including a BaseException
+        # such as a KeyboardInterrupt mid-teardown) -- never leak the serial handle.
+        try:
+            errors = _restore_state(psu, baseline)
+        finally:
+            psu.close()
         if errors:
             raise AssertionError(f"power supply restore failed: {errors}")
 

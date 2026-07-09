@@ -68,6 +68,13 @@ class PowerSupply:
             raise OutOfRangeError(
                 f"current_limit must be in (0, {_DEVICE_MAX_CURRENT}], got {current_limit}"
             )
+        # The slave (Modbus unit id) is stamped on every frame, including the first
+        # identity-check reads. Validate it here like comm_address does -- slave=0 is
+        # the broadcast address and slave>250 overflows into an opaque pymodbus error.
+        if not isinstance(slave, int) or isinstance(slave, bool):
+            raise TypeError(f"slave must be an int, got {type(slave).__name__}")
+        if not 1 <= slave <= 250:
+            raise OutOfRangeError(f"slave must be between 1 and 250, got {slave}")
         self.voltage_limit = voltage_limit
         self.current_limit = current_limit
         self._transport = Transport(port, baudrate=baudrate, slave=slave)
@@ -125,6 +132,11 @@ class PowerSupply:
     def _write_scaled(
         self, register: ScaledRegister, value: float, low: float, high: float, name: str
     ) -> None:
+        # Reject bool and non-numbers before the range check: `psu.voltage = True`
+        # would otherwise pass (0 <= 1 <= 30) and silently write 1.00 V. Same class
+        # as the output_enabled/comm_address bool guards, applied to the setpoints.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} must be a number, got {type(value).__name__}")
         if not low <= value <= high:
             raise OutOfRangeError(f"{name} must be between {low} and {high}, got {value}")
         raw = register.to_raw(value)
@@ -242,6 +254,17 @@ class PowerSupply:
     def __enter__(self) -> PowerSupply:
         return self
 
-    def __exit__(self, *exc: object) -> None:
-        # Closes the connection only; deliberately does NOT disable the output.
-        self.close()
+    def __exit__(self, exc_type: object, *exc: object) -> None:
+        # A CLEAN exit honors the "leave the output as you set it" philosophy (a
+        # deliberately-running output is a legitimate bench workflow). But an
+        # EXCEPTION unwinding out of the `with` block is an error path, and a `with`
+        # block implies safe teardown on error -- so fail safe and disable the output.
+        # The output-off attempt must never mask the original exception.
+        try:
+            if exc_type is not None:
+                try:
+                    self.output_enabled = False
+                except Exception:
+                    pass  # comms may be down; don't shadow the exception being raised
+        finally:
+            self.close()

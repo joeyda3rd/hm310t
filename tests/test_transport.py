@@ -36,14 +36,30 @@ def test_connect_exception_raises_typed_error(mock_client):
 
 
 def test_read_success_returns_register_values(mock_client):
-    response = MagicMock()
-    response.isError.return_value = False
-    response.registers = [1234, 500]
-    mock_client.read_holding_registers.return_value = response
+    # The mock must honor `count` -- read_register(count=1) returns one register, not
+    # two (the length guard now rejects a count mismatch, so a static list won't do).
+    def fake_read(address, count, slave):
+        response = MagicMock()
+        response.isError.return_value = False
+        response.registers = [1234, 500][:count]
+        return response
+
+    mock_client.read_holding_registers.side_effect = fake_read
     t = Transport("/dev/ttyUSB0")
     assert t.read_registers(0x0010, 2) == [1234, 500]
     assert t.read_register(0x0010) == 1234
     mock_client.read_holding_registers.assert_called_with(0x0010, count=1, slave=1)
+
+
+def test_short_response_raises_typed_error(mock_client):
+    # A non-error response with fewer registers than requested must surface as the
+    # typed error, never become an IndexError two layers up in the client.
+    response = MagicMock()
+    response.isError.return_value = False
+    response.registers = [1234]  # asked for 2, got 1
+    mock_client.read_holding_registers.return_value = response
+    with pytest.raises(PowerSupplyCommunicationError):
+        Transport("/dev/ttyUSB0").read_registers(0x0010, 2)
 
 
 def test_error_response_raises_typed_exception(mock_client):

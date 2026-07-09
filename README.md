@@ -100,9 +100,11 @@ Methods:
 
 ### Known limitations
 
-- **Closing does not disable the output.** `close()` (and leaving the `with` block) only closes the serial connection — the supply keeps sourcing at its setpoints. Leaving the output running is a legitimate bench workflow, so it is never forced off for you. Assign `output_enabled = False` explicitly when you want it off.
+- **A clean close does not disable the output.** `close()` — and a *normal* exit from the `with` block — only closes the serial connection; the supply keeps sourcing at its setpoints. Leaving the output running is a legitimate bench workflow, so a clean close never forces it off. (Exception: if the `with` block exits because of an *error*, `__exit__` disables the output as a fail-safe.) Assign `output_enabled = False` explicitly when you want it off.
 - **HM310T only.** The connect-time identity check (registers `0x0003` = 3010 and `0x0005` = 0x0233) rejects other models in the family (e.g. the HM305), whose ratings or decimal scaling differ.
 - **Multi-register writes use FC16.** OPP and the 32-bit reads/writes use Modbus function code 16 (write-multiple-registers). The OEM doc claims only FC03/FC06 are supported, but FC16 is verified working on the real unit; a firmware that rejects it will raise rather than silently misbehave.
+- **Protection-status bits are not hardware-verified.** `read_protection_status()` decodes the OVP/OCP/OPP/OTP/SCP bits per the OEM doc and the original driver, but confirming each bit would require deliberately tripping each protection, which the suite does not do. Treat `.tripped` as advisory, not a safety interlock.
+- **Not thread-safe.** A `PowerSupply` drives a single serial handle with no internal locking; do not share one instance across threads without providing your own mutex.
 
 ## Contributing
 

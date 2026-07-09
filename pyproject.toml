@@ -12,7 +12,7 @@ authors = [{ name = "Joey Marino", email = "joey.da3rd@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = [
     "pymodbus>=3.2.2,<4.0",
-    "pyserial",
+    "pyserial>=3.5",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
