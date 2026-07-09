@@ -3,7 +3,9 @@
 This repository contains a Python library to interact with the Hanmatek HM310T power supply over the Modbus interface.  
 Learn how this is accomplished for interacting with similar devices below in [#further reading](#further-reading).  
 
-<img src="/OEM-docs/61osnNY3qPL._SL1500_.jpg?raw=true" width="250"> <img src="/OEM-docs/81EDT-klVJL._SL1500_.jpg?raw=true" width="250">
+> This library is the packaged continuation of an earlier prototype, [`joeyda3rd/modbus-power-supply`](https://github.com/joeyda3rd/modbus-power-supply). That repository remains as the original proof of concept; active development happens here.
+
+<img src="https://raw.githubusercontent.com/joeyda3rd/hm310t/main/OEM-docs/61osnNY3qPL._SL1500_.jpg" width="250"> <img src="https://raw.githubusercontent.com/joeyda3rd/hm310t/main/OEM-docs/81EDT-klVJL._SL1500_.jpg" width="250">
 
 ⚠️ **Safety Warning**
 
@@ -15,6 +17,10 @@ This software is provided "as is", without warranty of any kind, express or impl
 
 By using this software, you agree that the authors and maintainers of this software are not liable for any damage to equipment, or any personal injury, that may occur through normal or abnormal use of this software. Always double-check your work and never leave a powered device unattended.
 
+⚠️ **AI-Assisted Code**
+
+Portions of this library were written with AI assistance and reviewed by multiple AI models and by human developers. That review does not guarantee correctness. Read the code and validate its behavior against your own hardware before relying on it — especially given the safety considerations above.
+
 ## Requirements
 
 - Python 3.10 or higher
@@ -25,7 +31,11 @@ By using this software, you agree that the authors and maintainers of this softw
 
 ## Installation
 
-Clone this repository and install it with pip:
+```bash
+pip install hm310t
+```
+
+Or from source:
 
 ```bash
 git clone https://github.com/joeyda3rd/hm310t.git
@@ -70,7 +80,7 @@ with PowerSupply(port="/dev/ttyUSB0") as psu:
 
 Runnable examples live in [`examples/`](examples): `basic_usage.py` (the script above, hardened) and `tui_dashboard.py`, a small curses dashboard.
 
-<img src="/images/screenshot-psui.jpg?raw=true" width="500">
+<img src="https://raw.githubusercontent.com/joeyda3rd/hm310t/main/images/screenshot-psui.jpg" width="500">
 
 ### API
 
