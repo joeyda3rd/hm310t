@@ -24,7 +24,7 @@ Portions of this library were written with AI assistance and reviewed by multipl
 ## Requirements
 
 - Python 3.10 or higher
-- PyModbus 3.2.2 or newer, < 4.0 (3.2.2 was used for development)
+- PyModbus 3.2.2 or newer, < 3.10 (3.2.2 was used for development; 3.10 renamed the `slave=` keyword to `device_id=`)
 - pyserial
 - A Hanmatek HM310T power supply connected to a PC by USB
 - May work with other Hanmatek or Modbus enabled power supplies, requires you to reverse engineer the unit. See [further reading](#further-reading) below for technical details and register values. Note that this library verifies it is talking to a genuine HM310T at connect time (registers `0x0003` and `0x0005`) and refuses other models.

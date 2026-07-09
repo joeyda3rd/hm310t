@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Pin `pymodbus<3.10` (was `<4.0`): pymodbus 3.10.0 renamed the `slave=` keyword
+  argument used on every read/write to `device_id=` with no compatibility shim,
+  so `pip install hm310t` resolved a pymodbus that made every register operation
+  raise `PowerSupplyCommunicationError`.
+- Add `MANIFEST.in` so the sdist includes `tests/conftest.py`; without it the
+  unit tests packaged in the sdist have no fixtures to import.
+
 ## [0.1.0] - 2026-07-09
 
 First packaged release: a reorganization of the original flat `pyHM310T.py`
