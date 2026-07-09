@@ -53,7 +53,8 @@ def main():
     try:
         output = read(client, 0x0001)
         print(f"# Output at start: {output}  (must be [0]; abort if not)")
-        assert output == [0], "OUTPUT IS ON -- abort and disable it first"
+        if output != [0]:  # explicit check, NOT assert -- must survive `python -O`
+            sys.exit("OUTPUT IS ON -- aborting; disable it first")
 
         print("\n## Documented register dump")
         for address, name in DOCUMENTED.items():
