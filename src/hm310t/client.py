@@ -14,6 +14,11 @@ from .transport import Transport
 # 30 V / 5 A -> 3005) reports identical decimals and must be rejected here.
 EXPECTED_SPECIFICATION = 3010
 
+# The HM310T's hardware rating (confirmed via 0x0003 == 3010). The constructor's
+# voltage_limit/current_limit software ceilings may lower these but never exceed them.
+_DEVICE_MAX_VOLTAGE = 30.0
+_DEVICE_MAX_CURRENT = 10.0
+
 
 @dataclass(frozen=True)
 class Measurement:
@@ -53,6 +58,16 @@ class PowerSupply:
         voltage_limit: float = 30.0,
         current_limit: float = 10.0,
     ) -> None:
+        # Software ceilings may lower the device rating but never exceed it: the 0x0003
+        # check confirms this is a 30 V / 10 A HM310T, so a higher limit is a caller bug.
+        if not 0 < voltage_limit <= _DEVICE_MAX_VOLTAGE:
+            raise OutOfRangeError(
+                f"voltage_limit must be in (0, {_DEVICE_MAX_VOLTAGE}], got {voltage_limit}"
+            )
+        if not 0 < current_limit <= _DEVICE_MAX_CURRENT:
+            raise OutOfRangeError(
+                f"current_limit must be in (0, {_DEVICE_MAX_CURRENT}], got {current_limit}"
+            )
         self.voltage_limit = voltage_limit
         self.current_limit = current_limit
         self._transport = Transport(port, baudrate=baudrate, slave=slave)
@@ -167,6 +182,8 @@ class PowerSupply:
 
     @comm_address.setter
     def comm_address(self, value: int) -> None:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"comm_address must be an int, got {type(value).__name__}")
         if not 1 <= value <= 250:
             raise OutOfRangeError(f"comm_address must be between 1 and 250, got {value}")
         # If this write raises, the device may or may not have switched address;
@@ -180,7 +197,11 @@ class PowerSupply:
 
     @output_enabled.setter
     def output_enabled(self, value: bool) -> None:
-        self._transport.write_register(registers.OUTPUT, int(bool(value)))
+        # Strict bool only: `output_enabled = "false"` must NOT enable a 300 W output
+        # (bool("false") is True). Reject anything that isn't a real bool.
+        if not isinstance(value, bool):
+            raise TypeError(f"output_enabled must be a bool, got {type(value).__name__}")
+        self._transport.write_register(registers.OUTPUT, int(value))
 
     def read_measurement(self) -> Measurement:
         """Read voltage/current/power display in ONE Modbus transaction (no torn reads)."""

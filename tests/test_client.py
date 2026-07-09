@@ -22,6 +22,7 @@ class FakeTransport:
         self.slave = slave
         self.closed = False
         self.fail_reads = False
+        self.fail_writes = False
         self.read_log = []  # (address, count)
         self.write_log = []  # (address, [values]) -- single-value list = FC06, longer = FC16
         self.registers = {
@@ -58,10 +59,14 @@ class FakeTransport:
         return self.read_registers(address, 1)[0]
 
     def write_register(self, address, value):
+        if self.fail_writes:
+            raise PowerSupplyCommunicationError("simulated write failure")
         self.write_log.append((address, [value]))
         self.registers[address] = value
 
     def write_registers(self, address, values):
+        if self.fail_writes:
+            raise PowerSupplyCommunicationError("simulated write failure")
         self.write_log.append((address, list(values)))
         for i, value in enumerate(values):
             self.registers[address + i] = value
@@ -271,3 +276,34 @@ def test_comm_address_setter_retargets_transport(psu, fake_transports):
 def test_read_raw_register_escape_hatch(psu, fake_transports):
     fake_transports[0].registers[0x0004] = 1234
     assert psu.read_raw_register(0x0004) == 1234
+
+
+def test_output_enabled_rejects_non_bool(psu, fake_transports):
+    # Safety (adversarial review): bool("false") is True, so a coerced value could
+    # ENABLE a 300 W output. Only a real bool is accepted; nothing else writes.
+    for bad in ("false", "0", 0.0, 2):
+        with pytest.raises(TypeError):
+            psu.output_enabled = bad
+    assert fake_transports[0].write_log == []
+
+
+def test_comm_address_rejects_non_int(psu, fake_transports):
+    for bad in (1.5, "5", True):
+        with pytest.raises(TypeError):
+            psu.comm_address = bad
+    assert fake_transports[0].write_log == []
+
+
+def test_constructor_rejects_limits_above_device_rating(fake_transports):
+    # The 0x0003 check confirms a 30 V / 10 A HM310T, so a higher software ceiling is a bug.
+    with pytest.raises(OutOfRangeError):
+        PowerSupply(port="fake", voltage_limit=35.0)
+    with pytest.raises(OutOfRangeError):
+        PowerSupply(port="fake", current_limit=20.0)
+
+
+def test_setter_write_failure_propagates(psu, fake_transports):
+    # Bug #8 at the client layer: a transport write failure must raise, never be swallowed.
+    fake_transports[0].fail_writes = True
+    with pytest.raises(PowerSupplyCommunicationError):
+        psu.voltage = 5.0
