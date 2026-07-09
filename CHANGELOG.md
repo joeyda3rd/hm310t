@@ -29,8 +29,10 @@ hardware-free unit suite, and a hardware contract suite.
 - Hardware contract suite (`tests/test_contract.py`) that talks to a real device
   and skips cleanly when none is attached, plus `tests/test_conftest_safety.py`,
   which covers the safety-critical fixture teardown without hardware.
-- Examples (`examples/basic_usage.py`, `examples/tui_dashboard.py`) and a
-  read-only register scanner (`tools/scan_registers.py`).
+- Examples (`examples/basic_usage.py`, `examples/tui_dashboard.py`), a read-only
+  register scanner (`tools/scan_registers.py`), and an opt-in write smoke test
+  (`tools/smoke_write.py`) that round-trips each setpoint on a real device with the
+  output kept off.
 
 ### Changed
 - Minimum Python is now **3.10** (was 3.7).
