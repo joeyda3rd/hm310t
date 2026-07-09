@@ -3,7 +3,7 @@
 This repository contains a Python library to interact with the Hanmatek HM310T power supply over the Modbus interface.  
 Learn how this is accomplished for interacting with similar devices below in [#further reading](#further-reading).  
 
-> This library is the packaged continuation of an earlier prototype, [`joeyda3rd/modbus-power-supply`](https://github.com/joeyda3rd/modbus-power-supply). That repository remains as the original proof of concept; active development happens here.
+> This library began as a flat prototype script (`pyHM310T.py`). That original code is preserved on the [`legacy/original-prototype`](https://github.com/joeyda3rd/hm310t/tree/legacy/original-prototype) branch; `main` is the packaged, pip-installable library.
 
 <img src="https://raw.githubusercontent.com/joeyda3rd/hm310t/main/OEM-docs/61osnNY3qPL._SL1500_.jpg" width="250"> <img src="https://raw.githubusercontent.com/joeyda3rd/hm310t/main/OEM-docs/81EDT-klVJL._SL1500_.jpg" width="250">
 
