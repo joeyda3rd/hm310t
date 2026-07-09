@@ -17,125 +17,92 @@ By using this software, you agree that the authors and maintainers of this softw
 
 ## Requirements
 
-- Python 3.7 or higher
-- PyModbus (version 3.2.2 was used for development)
+- Python 3.10 or higher
+- PyModbus 3.2.2 or newer, < 4.0 (3.2.2 was used for development)
+- pyserial
 - A Hanmatek HM310T power supply connected to a PC by USB
-- May work with other Hanmatek or Modbus enabled power supplies, requires you to reverse engineer the unit. See [further reading](#further-reading) below for technical details and register values.
-
-
-
-...
+- May work with other Hanmatek or Modbus enabled power supplies, requires you to reverse engineer the unit. See [further reading](#further-reading) below for technical details and register values. Note that this library verifies it is talking to a genuine HM310T at connect time (registers `0x0003` and `0x0005`) and refuses other models.
 
 ## Installation
 
-To install the library, clone this repository and install it using pip:
+Clone this repository and install it with pip:
 
 ```bash
-pip install -v "pymodbus==3.2.2"
-pip install pyserial
-git clone https://github.com/joeyda3rd/hanmatek-power-supply.git
-cd hanmatek-power-supply
+git clone https://github.com/joeyda3rd/hm310t.git
+cd hm310t
 pip install .
 ```
 
 ## Usage
 
-### Simple Application Example
-See the simple CLI application example (psui.py)  
-<img src="/images/screenshot-psui.jpg?raw=true" width="500">
-
-Here are usage examples:
+The API is property-based: setpoints and protection limits are plain attributes you read and assign; live readings and status come from small methods that return typed values.
 
 ```python
-from pyHM310T import PowerSupply
+from hm310t import PowerSupply
 
-# Create instance with default parameters
-# COM port, baudrate = 9600, slave=1, voltage_limit=30.0, current_limit=10.0):
-power_supply = PowerSupply(port='/dev/ttyUSB0')
+# port, baudrate=9600, slave=1, voltage_limit=30.0, current_limit=10.0
+with PowerSupply(port="/dev/ttyUSB0") as psu:
+    # Set protection trip points first, while the output is still off.
+    psu.ovp = 6.0    # over-voltage protection, volts
+    psu.ocp = 2.0    # over-current protection, amps
+    psu.opp = 20.0   # over-power protection, watts
 
-# Alternatively, create instance with custom parameters
-# power_supply = PowerSupply('COM4', 115200, 2, 10.0, 5.0)
+    # Setpoints the output will regulate to.
+    psu.voltage = 5.0
+    psu.current = 1.0
+    print(f"Setpoint: {psu.voltage} V, {psu.current} A")
 
-# Enable the output
-power_supply.enable_output()
+    # CAUTION: this energizes the terminals.
+    psu.output_enabled = True
+    print(f"Output enabled: {psu.output_enabled}")
 
-# Check if output is enabled
-if power_supply.is_output_enabled():
-    print("Output is enabled")
+    # One atomic read of the live output (reads ~0 with no load attached).
+    m = psu.read_measurement()
+    print(f"Measured: {m.voltage} V, {m.current} A, {m.power} W")
 
-# Set the voltage to 5V
-power_supply.set_voltage(5.0)
+    # Protection status is a typed struct with a .tripped convenience flag.
+    status = psu.read_protection_status()
+    print(f"Tripped: {status.tripped}  ({status})")
 
-# Get the set voltage
-set_voltage = power_supply.get_voltage()
-print(f"Set voltage: {set_voltage}V")
-
-# Set the current to 1A
-power_supply.set_current(1.0)
-
-# Get the set current
-set_current = power_supply.get_current()
-print(f"Set current: {set_current}A")
-
-# Get voltage, current and power display (requires a load present)
-print(f"Voltage display: {power_supply.get_voltage_display()}V")
-print(f"Current display: {power_supply.get_current_display()}A")
-print(f"Power display: {power_supply.get_power_display()}W")
-
-# Get and set communication address
-print(f"Communication address: {power_supply.get_comm_address()}")
-# uncomment to change address, but will require new connection at new address.
-# power_supply.set_comm_address(2)
-# print(f"New communication address: {power_supply.get_comm_address()}")
-
-# Get protection status
-print(f"Protection status: {power_supply.get_protection_status()}")
-
-# Get and set Over Voltage Protection (OVP) status
-print(f"OVP status: {power_supply.get_ovp()}")
-power_supply.set_ovp(10)
-print(f"New OVP status: {power_supply.get_ovp()}")
-
-# Get and set Over Current Protection (OCP) status
-print(f"OCP status: {power_supply.get_ocp()}")
-power_supply.set_ocp(2)
-print(f"New OCP status: {power_supply.get_ocp()}")
-
-# Get and set Over Power Protection (OPP) status
-print(f"OPP status: {power_supply.get_opp()}")
-power_supply.set_opp(20)
-print(f"New OPP status: {power_supply.get_opp()}")
-
-#disable power output
-power_supply.disable_output()
-
-# Check if output is disabled
-if not(power_supply.is_output_enabled()):
-    print("Output is disabled")
-
+    # Always disable the output when you are done -- closing does NOT do it.
+    psu.output_enabled = False
 ```
 
-### Methods
+Runnable examples live in [`examples/`](examples): `basic_usage.py` (the script above, hardened) and `tui_dashboard.py`, a small curses dashboard.
 
-Here are the methods provided by the `PowerSupply` class:
+<img src="/images/screenshot-psui.jpg?raw=true" width="500">
 
-- `enable_output(enable=True)`: Enable or disable the power output. `enable` should be a boolean value.
-- `is_output_enabled()`: Check if the power output is enabled. Returns a boolean value.
-- `disable_output()`: Disable the power output.
-- `set_voltage(voltage)`: Set the output voltage. `voltage` should be a float value between 0 and 30 (or set limit).
-- `get_voltage()`: Get the set output voltage. Returns a float value.
-- `set_current(current)`: Set the output current. `current` should be a float value between 0 and 10 (or set limit).
-- `get_current()`: Get the set output current. Returns a float value.
-- `get_voltage_display()`: Get the displayed output voltage. Returns a float value.
-- `get_current_display()`: Get the displayed output current. Returns a float value.
-- `get_power_display()`: Get the displayed output power. Returns a float value.
-- `get_comm_address()`: Get the communication address. Returns an integer value between 1 and 250.
-- `set_comm_address(address)`: Set the communication address. `address` should be an integer value between 1 and 250.
-- `get_protection_status()`: Get the protection status. Returns a dictionary with the keys 'isOVP', 'isOCP', 'isOPP', 'isOTP', and 'isSCP'.
-- `get_ovp()`, `set_ovp(ovp)`: Get or set the Over Voltage Protection (OVP) value. `ovp` should be a float value between 0 and 30.
-- `get_ocp()`, `set_ocp(ocp)`: Get or set the Over Current Protection (OCP) value. `ocp` should be a float value between 0 and 10.
-- `get_opp()`, `set_opp(opp)`: Get or set the Over Power Protection (OPP) value. `opp` should be a float value between 0 and 300.
+### API
 
+Setpoints and protection limits are **read/write properties** (float unless noted):
+
+| Property | Range | Description |
+| -------- | ----- | ----------- |
+| `voltage` | 0 – `voltage_limit` | Output voltage setpoint (V) |
+| `current` | 0 – `current_limit` | Output current setpoint (A) |
+| `ovp` | 0 – 30 | Over-voltage protection trip point (V) |
+| `ocp` | 0 – 10 | Over-current protection trip point (A) |
+| `opp` | 0 – 300 | Over-power protection trip point (W) |
+| `output_enabled` | `bool` | Output on/off. Assigning anything but a real `bool` raises `TypeError` |
+| `comm_address` | 1 – 250 (`int`) | Modbus slave address; setting it retargets the connection |
+| `voltage_limit`, `current_limit` | read-only | Software ceilings set in the constructor |
+
+Methods:
+
+| Method | Returns |
+| ------ | ------- |
+| `read_measurement()` | `Measurement(voltage, current, power)` — one atomic read of the live output |
+| `read_protection_status()` | `ProtectionStatus(is_ovp, is_ocp, is_opp, is_otp, is_scp)` with a `.tripped` property |
+| `read_raw_register(address)` | `int` — escape hatch to read any holding register directly |
+| `close()` | Closes the serial connection (see "Known limitations") |
+
+`PowerSupply` is a context manager (`with PowerSupply(...) as psu:`). Out-of-range setpoints raise `OutOfRangeError`; communication failures raise `PowerSupplyCommunicationError`; a non-HM310T device raises `IncompatibleDeviceError`. All derive from `HM310TError`.
+
+### Known limitations
+
+- **Closing does not disable the output.** `close()` (and leaving the `with` block) only closes the serial connection — the supply keeps sourcing at its setpoints. Leaving the output running is a legitimate bench workflow, so it is never forced off for you. Assign `output_enabled = False` explicitly when you want it off.
+- **HM310T only.** The connect-time identity check (registers `0x0003` = 3010 and `0x0005` = 0x0233) rejects other models in the family (e.g. the HM305), whose ratings or decimal scaling differ.
+- **Multi-register writes use FC16.** OPP and the 32-bit reads/writes use Modbus function code 16 (write-multiple-registers). The OEM doc claims only FC03/FC06 are supported, but FC16 is verified working on the real unit; a firmware that rejects it will raise rather than silently misbehave.
 
 ## Contributing
 
@@ -149,7 +116,7 @@ This library is licensed under the MIT license.
 ## Further Reading
 
 When reverse engineering a power supply with a modbus interface, either over serial or other communication protocol, it's going to be essential to know the register addresses for the various I/O and the function code. In this case, we got lucky and the OEM provided that documentation. 
-It's possible to learn these by using a script to brute force read and write (and read) each address from 1 to 9999 (see modbus_read.py in code) and/or sniffing the unencrypted traffic of OEM software. It's important to understand the Modbus protocol register addressing. 
+It's possible to learn these by using a script to brute force read and write (and read) each address from 1 to 9999 (see `tools/scan_registers.py` in code) and/or sniffing the unencrypted traffic of OEM software. It's important to understand the Modbus protocol register addressing. 
 
 In the Modbus protocol, there are four types of data that can be accessed, each with its own address space:
 
