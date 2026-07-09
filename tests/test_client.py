@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 
 import hm310t.client
-from hm310t import IncompatibleDeviceError, PowerSupply, PowerSupplyCommunicationError
+from hm310t import (
+    IncompatibleDeviceError,
+    Measurement,
+    OutOfRangeError,
+    PowerSupply,
+    PowerSupplyCommunicationError,
+    ProtectionStatus,
+)
 
 
 class FakeTransport:
@@ -175,3 +182,92 @@ def test_context_manager_closes_transport(fake_transports):
     with PowerSupply(port="fake") as supply:
         assert isinstance(supply, PowerSupply)
     assert fake_transports[0].closed
+
+
+def test_voltage_setpoint_write_rounds_not_truncates(psu, fake_transports):
+    # Spec bug #7: 0.29 * 100 == 28.999999999999996; int() writes 28, round() writes 29.
+    psu.voltage = 0.29
+    assert fake_transports[0].write_log == [(0x0030, [29])]
+
+
+def test_scaled_reads(psu, fake_transports):
+    fake_transports[0].registers[0x0030] = 1234
+    fake_transports[0].registers[0x0031] = 500
+    assert psu.voltage == pytest.approx(12.34)
+    assert psu.current == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("voltage", 31.0),
+        ("voltage", -1.0),
+        ("current", 11.0),
+        ("current", -0.1),
+        ("ovp", 31.0),
+        ("ocp", 11.0),
+        ("opp", 301.0),
+        ("comm_address", 0),
+        ("comm_address", 251),
+    ],
+)
+def test_out_of_range_setpoints_raise_and_write_nothing(psu, fake_transports, name, value):
+    with pytest.raises(OutOfRangeError):
+        setattr(psu, name, value)
+    assert fake_transports[0].write_log == []
+
+
+def test_opp_write_is_one_atomic_fc16(psu, fake_transports):
+    psu.opp = 200.0
+    assert fake_transports[0].write_log == [(0x0022, [0, 20000])]
+
+
+def test_opp_read_is_one_batched_read(psu, fake_transports):
+    fake_transports[0].registers[0x0022] = 0
+    fake_transports[0].registers[0x0023] = 20000
+    assert psu.opp == pytest.approx(200.0)
+    assert fake_transports[0].read_log == [(0x0022, 2)]
+
+
+def test_read_measurement_is_one_batched_read(psu, fake_transports):
+    # Spec bug #4: the old two-call read could tear a live 32-bit power value.
+    transport = fake_transports[0]
+    transport.registers.update({0x0010: 500, 0x0011: 1500, 0x0012: 1, 0x0013: 34464})
+    measurement = psu.read_measurement()
+    assert transport.read_log == [(0x0010, 4)]
+    assert measurement == Measurement(voltage=5.0, current=1.5, power=100.0)
+
+
+def test_output_enabled_roundtrip(psu, fake_transports):
+    psu.output_enabled = True
+    assert fake_transports[0].write_log == [(0x0001, [1])]
+    assert psu.output_enabled is True
+
+
+def test_output_enabled_read_failure_raises(psu, fake_transports):
+    # Spec bug #2: a comms failure must not read as "confirmed safely off".
+    fake_transports[0].fail_reads = True
+    with pytest.raises(PowerSupplyCommunicationError):
+        _ = psu.output_enabled
+
+
+def test_protection_status_decodes_bits(psu, fake_transports):
+    fake_transports[0].registers[0x0002] = 0b10101
+    status = psu.read_protection_status()
+    assert status == ProtectionStatus(
+        is_ovp=True, is_ocp=False, is_opp=True, is_otp=False, is_scp=True
+    )
+    assert status.tripped is True
+    fake_transports[0].registers[0x0002] = 0
+    assert psu.read_protection_status().tripped is False
+
+
+def test_comm_address_setter_retargets_transport(psu, fake_transports):
+    psu.comm_address = 5
+    assert fake_transports[0].write_log == [(0x9999, [5])]
+    assert fake_transports[0].slave == 5
+
+
+def test_read_raw_register_escape_hatch(psu, fake_transports):
+    fake_transports[0].registers[0x0004] = 1234
+    assert psu.read_raw_register(0x0004) == 1234
