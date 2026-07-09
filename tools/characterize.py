@@ -7,6 +7,7 @@ throughout. Standalone: raw pymodbus, no dependency on the hm310t package.
 Run once and commit the printed output as evidence:
     python tools/characterize.py | tee docs/hardware-characterization-2026-07-09.md
 """
+
 from __future__ import annotations
 
 import sys
