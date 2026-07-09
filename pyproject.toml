@@ -9,7 +9,7 @@ description = "Control a Hanmatek HM310T bench power supply over Modbus RTU"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Joey Marino", email = "joey.da3rd@gmail.com" }]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "pymodbus>=3.2.2,<4.0",
     "pyserial",
@@ -39,13 +39,13 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 strict = true
 files = ["src"]
 
