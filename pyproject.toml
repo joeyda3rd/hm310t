@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hm310t"
+version = "0.1.0"
+description = "Control a Hanmatek HM310T bench power supply over Modbus RTU"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Joey Marino", email = "joey.da3rd@gmail.com" }]
+requires-python = ">=3.9"
+dependencies = [
+    "pymodbus>=3.2.2,<4.0",
+    "pyserial",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
+
+[project.urls]
+Homepage = "https://github.com/joeyda3rd/hm310t"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hm310t = ["py.typed"]
+
+[tool.pytest.ini_options]
+markers = [
+    "hardware: needs a real HM310T attached (default port /dev/ttyUSB0, override with PSU_TEST_PORT)",
+    "requires_load: needs a real HM310T plus a physical load wired to the output terminals; opt in with PSU_LOAD_ATTACHED=1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = "pymodbus.*"
+ignore_missing_imports = true
