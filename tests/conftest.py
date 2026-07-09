@@ -43,16 +43,21 @@ def _restore_state(psu: PowerSupply, baseline: dict[str, object]) -> list[str]:
     errors: list[str] = []
 
     # Force output off before touching setpoints, so nothing energizes mid-restore.
+    output_is_off = False
     try:
         psu.output_enabled = False
+        output_is_off = True
     except Exception as exc:  # noqa: BLE001 -- collect, never abort the restore
         errors.append(f"output-off: {exc!r}")
 
-    for name in ("ovp", "ocp", "opp", "voltage", "current"):
-        try:
-            setattr(psu, name, baseline[name])
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{name}: {exc!r}")
+    # Only restore setpoints once the output is CONFIRMED off -- never write
+    # setpoints to a possibly-live output (mirrors the entry-side discipline).
+    if output_is_off:
+        for name in ("ovp", "ocp", "opp", "voltage", "current"):
+            try:
+                setattr(psu, name, baseline[name])
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{name}: {exc!r}")
 
     # Safety-critical and LAST: re-apply the caller's original output state.
     try:

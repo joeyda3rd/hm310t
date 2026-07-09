@@ -66,3 +66,26 @@ def test_managed_supply_isolates_a_failed_restore_and_still_restores_output(monk
 
     assert (OUTPUT, [1]) in transport.write_log  # output restored despite the failure
     assert transport.closed
+
+
+def test_managed_supply_skips_setpoint_restore_when_teardown_force_off_fails(monkeypatch):
+    class TeardownOffFails(FakeTransport):
+        arm = False  # when armed, the output-OFF write fails (simulates a teardown comms loss)
+
+        def write_register(self, address, value):
+            if address == OUTPUT and value == 0 and self.arm:
+                raise PowerSupplyCommunicationError("simulated teardown force-off failure")
+            return super().write_register(address, value)
+
+    psu, transport = _build_psu_with_output_on(monkeypatch, TeardownOffFails)
+
+    # The teardown's force-off fails. Setpoints must NOT be written to a possibly-live
+    # output; the failure must still surface and the port must still close.
+    with pytest.raises(AssertionError, match="output-off"):
+        with managed_power_supply(psu):
+            transport.arm = True  # make the *teardown* force-off (not the entry one) fail
+
+    setpoint_regs = {0x0020, 0x0021, 0x0022, 0x0030, 0x0031}
+    assert not any(addr in setpoint_regs for addr, _ in transport.write_log)
+    assert (OUTPUT, [1]) in transport.write_log  # baseline output state still restored
+    assert transport.closed

@@ -42,6 +42,12 @@ def main(stdscr: curses.window) -> None:
 
     stdscr.nodelay(True)  # non-blocking getch()
     try:
+        # Conservative protection before the 'e' key can energize anything. This
+        # demo sweeps VOLTAGE, so OVP sits at the device ceiling; OCP and OPP cap
+        # the real thermal hazards (current, power) at low values.
+        ps.ovp = 30.0
+        ps.ocp = 1.0
+        ps.opp = 30.0
         while True:
             m = ps.read_measurement()
             stdscr.clear()
@@ -70,6 +76,15 @@ def main(stdscr: curses.window) -> None:
 
             stdscr.nodelay(True)
             time.sleep(0.1)
+    except BaseException:
+        # Abnormal exit (Ctrl-C, a comms error mid-loop): fail safe -- never leave
+        # the output energized with no in-process way to disable it. The deliberate
+        # 'q' quit path above is a normal return, so it keeps its leave-on choice.
+        try:
+            ps.output_enabled = False
+        except Exception:
+            pass  # comms may be dead; the device's front panel is the last resort
+        raise
     finally:
         ps.close()
 
