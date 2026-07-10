@@ -85,7 +85,10 @@ class PowerSupply:
         except BaseException:
             # Spec bug #1: never leak the serial handle if connect or post-connect
             # verification fails partway (close() is safe on a never-opened port).
-            self._transport.close()
+            try:
+                self._transport.close()
+            except Exception:
+                pass  # comms are already broken; don't mask the real init failure
             raise
 
     def _check_decimal_capacity(self) -> None:
@@ -140,6 +143,12 @@ class PowerSupply:
         if not low <= value <= high:
             raise OutOfRangeError(f"{name} must be between {low} and {high}, got {value}")
         raw = register.to_raw(value)
+        # A limit with more precision than the register holds (e.g. voltage_limit=5.009
+        # against a 2dp register) can let `value` pass the check above yet still round to
+        # a raw word past the limit (501 -> 5.01 V). Re-check the value the device will
+        # actually see post-rounding, not just the caller's unrounded float.
+        if not low <= register.from_raw(raw) <= high:
+            raise OutOfRangeError(f"{name} must be between {low} and {high}, got {value}")
         if register.words == 1:
             self._transport.write_register(register.address, raw)
         else:
@@ -267,4 +276,9 @@ class PowerSupply:
                 except Exception:
                     pass  # comms may be down; don't shadow the exception being raised
         finally:
-            self.close()
+            try:
+                self.close()
+            except Exception:
+                if exc_type is None:
+                    raise  # clean exit: nothing to protect, surface the close failure
+                # else: an exception is already unwinding -- don't replace it

@@ -26,6 +26,10 @@ def test_connect_failure_raises(mock_client):
         Transport("/dev/ttyUSB0").connect()
 
 
+def test_connect_success_returns_none(mock_client):
+    assert Transport("/dev/ttyUSB0").connect() is None
+
+
 def test_connect_exception_raises_typed_error(mock_client):
     # pymodbus 3.2.2 returns False on a bad port, but "every transport failure
     # raises the typed error" must hold even if a pymodbus version raises here
@@ -84,10 +88,29 @@ def test_non_modbus_exception_raises_typed_error(mock_client):
         Transport("/dev/ttyUSB0").read_register(0x0030)
 
 
+def test_write_register_error_response_raises(mock_client):
+    mock_client.write_register.return_value.isError.return_value = True
+    with pytest.raises(PowerSupplyCommunicationError):
+        Transport("/dev/ttyUSB0").write_register(0x0030, 500)
+
+
 def test_write_error_response_raises(mock_client):
     mock_client.write_registers.return_value.isError.return_value = True
     with pytest.raises(PowerSupplyCommunicationError):
         Transport("/dev/ttyUSB0").write_registers(0x0022, [0, 20000])
+
+
+def test_write_registers_exception_raises_typed_error(mock_client):
+    mock_client.write_registers.side_effect = OSError("device unplugged")
+    with pytest.raises(PowerSupplyCommunicationError):
+        Transport("/dev/ttyUSB0").write_registers(0x0022, [0, 20000])
+
+
+def test_write_registers_success_returns_none(mock_client):
+    response = MagicMock()
+    response.isError.return_value = False
+    mock_client.write_registers.return_value = response
+    assert Transport("/dev/ttyUSB0").write_registers(0x0022, [0, 20000]) is None
 
 
 def test_writes_use_configured_slave(mock_client):
@@ -97,6 +120,14 @@ def test_writes_use_configured_slave(mock_client):
     t = Transport("/dev/ttyUSB0", slave=3)
     t.write_register(0x0030, 500)
     mock_client.write_register.assert_called_with(0x0030, 500, slave=3)
+
+
+def test_close_exception_raises_typed_error(mock_client):
+    # close() was the one I/O method that didn't wrap failures (bug #2) -- a raw
+    # OSError from the serial handle must surface as our own typed error too.
+    mock_client.close.side_effect = OSError("device unplugged")
+    with pytest.raises(PowerSupplyCommunicationError):
+        Transport("/dev/ttyUSB0").close()
 
 
 def test_no_dead_method_kwarg(monkeypatch):

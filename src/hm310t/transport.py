@@ -33,7 +33,12 @@ class Transport:
             )
 
     def close(self) -> None:
-        self._client.close()
+        try:
+            self._client.close()
+        except Exception as exc:
+            raise PowerSupplyCommunicationError(
+                f"Failed to close serial connection: {exc}"
+            ) from exc
 
     def read_registers(self, address: int, count: int) -> list[int]:
         try:

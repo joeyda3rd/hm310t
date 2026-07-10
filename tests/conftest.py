@@ -15,7 +15,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from hm310t import PowerSupply
+from hm310t import PowerSupply, PowerSupplyCommunicationError
 
 PSU_PORT = os.environ.get("PSU_TEST_PORT", "/dev/ttyUSB0")
 
@@ -105,8 +105,10 @@ def power_supply() -> Iterator[PowerSupply]:
     """A real HM310T with output forced off for the test and state restored after."""
     try:
         psu = PowerSupply(port=PSU_PORT)
-    except Exception as exc:  # noqa: BLE001
+    except PowerSupplyCommunicationError as exc:
         pytest.skip(f"no HM310T reachable on {PSU_PORT}: {exc}")
+    # IncompatibleDeviceError (wrong model/firmware) and any other unexpected
+    # constructor failure must fail the test loudly, not be swallowed as "no device".
 
     with managed_power_supply(psu) as supply:
         yield supply

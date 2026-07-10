@@ -127,6 +127,7 @@ def test_invalid_port_raises_communication_error():
         PowerSupply(port="/dev/hm310t-nonexistent")
 
 
+@hardware
 @pytest.mark.requires_load
 @pytest.mark.skipif(not LOAD_ATTACHED, reason="set PSU_LOAD_ATTACHED=1 with a load wired up")
 def test_measurement_under_load(power_supply):

@@ -189,6 +189,44 @@ def test_context_manager_closes_transport(fake_transports):
     assert fake_transports[0].closed
 
 
+class RaisingCloseTransport(FakeTransport):
+    """A Transport whose close() itself fails (e.g. serial handle already gone)."""
+
+    def close(self):
+        raise PowerSupplyCommunicationError("simulated close failure")
+
+
+def test_init_close_failure_does_not_mask_original_error(monkeypatch):
+    # P2: if close() raises while unwinding from a verification failure, the
+    # ORIGINAL error (wrong spec) must still be what's raised, not the close failure.
+    class WrongSpecRaisingClose(RaisingCloseTransport):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.registers[0x0003] = 3005
+
+    monkeypatch.setattr(hm310t.client, "Transport", WrongSpecRaisingClose)
+    with pytest.raises(IncompatibleDeviceError):
+        PowerSupply(port="fake")
+
+
+def test_exit_close_failure_does_not_mask_original_error(monkeypatch):
+    # An exception unwinding out of the `with` block must survive even if the
+    # __exit__ close() call itself raises.
+    monkeypatch.setattr(hm310t.client, "Transport", RaisingCloseTransport)
+    with pytest.raises(RuntimeError):
+        with PowerSupply(port="fake"):
+            raise RuntimeError("boom")
+
+
+def test_exit_close_failure_propagates_on_clean_exit(monkeypatch):
+    # No original exception to protect here, so a close failure on a clean exit
+    # must still surface -- it must not be silently swallowed.
+    monkeypatch.setattr(hm310t.client, "Transport", RaisingCloseTransport)
+    with pytest.raises(PowerSupplyCommunicationError):
+        with PowerSupply(port="fake"):
+            pass
+
+
 def test_voltage_setpoint_write_rounds_not_truncates(psu, fake_transports):
     # Spec bug #7: 0.29 * 100 == 28.999999999999996; int() writes 28, round() writes 29.
     psu.voltage = 0.29
@@ -273,6 +311,11 @@ def test_comm_address_setter_retargets_transport(psu, fake_transports):
     assert fake_transports[0].slave == 5
 
 
+def test_comm_address_read(psu, fake_transports):
+    fake_transports[0].registers[0x9999] = 7
+    assert psu.comm_address == 7
+
+
 def test_read_raw_register_escape_hatch(psu, fake_transports):
     fake_transports[0].registers[0x0004] = 1234
     assert psu.read_raw_register(0x0004) == 1234
@@ -300,6 +343,23 @@ def test_constructor_rejects_limits_above_device_rating(fake_transports):
         PowerSupply(port="fake", voltage_limit=35.0)
     with pytest.raises(OutOfRangeError):
         PowerSupply(port="fake", current_limit=20.0)
+
+
+def test_voltage_setter_rejects_value_that_rounds_above_fractional_limit(fake_transports):
+    # voltage_limit=5.009 has more precision than the register's 2dp resolution.
+    # A request at exactly that limit must not round UP to raw 501 (5.01 V) and write it.
+    psu = PowerSupply(port="fake", voltage_limit=5.009)
+    with pytest.raises(OutOfRangeError):
+        psu.voltage = 5.009
+    assert fake_transports[0].write_log == []
+
+
+def test_current_setter_rejects_value_that_rounds_above_fractional_limit(fake_transports):
+    # current_limit=1.2349 has more precision than the register's 3dp resolution.
+    psu = PowerSupply(port="fake", current_limit=1.2349)
+    with pytest.raises(OutOfRangeError):
+        psu.current = 1.2349
+    assert fake_transports[0].write_log == []
 
 
 def test_setter_write_failure_propagates(psu, fake_transports):
@@ -352,3 +412,27 @@ def test_exit_leaves_output_untouched_on_clean_exit(fake_transports):
     output_writes = [value for addr, value in transport.write_log if addr == 0x0001]
     assert output_writes == [[1]]  # only the deliberate enable; teardown added nothing
     assert transport.closed
+
+
+def test_exit_output_off_failure_does_not_mask_original_error(monkeypatch):
+    # __exit__'s fail-safe output-off attempt is itself allowed to fail (comms may
+    # already be down): the original exception unwinding out of the `with` block
+    # must survive, and close() must still run.
+    class OutputOffFails(FakeTransport):
+        def write_register(self, address, value):
+            if address == 0x0001 and value == 0:
+                raise PowerSupplyCommunicationError("simulated output-off failure")
+            return super().write_register(address, value)
+
+    created = []
+
+    def factory(*args, **kwargs):
+        transport = OutputOffFails(*args, **kwargs)
+        created.append(transport)
+        return transport
+
+    monkeypatch.setattr(hm310t.client, "Transport", factory)
+    with pytest.raises(RuntimeError):
+        with PowerSupply(port="fake"):
+            raise RuntimeError("boom")
+    assert created[0].closed
