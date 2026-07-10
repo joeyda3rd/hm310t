@@ -22,10 +22,20 @@ def test_from_raw_applies_decimals():
 def test_register_map_matches_oem_doc():
     assert (VOLTAGE.address, VOLTAGE.decimals) == (0x0030, 2)
     assert (CURRENT.address, CURRENT.decimals) == (0x0031, 3)
-    # Spec bug #5: OCP is 2 decimal places (like voltage/OVP), not 3 (like current).
-    assert (OCP.address, OCP.decimals) == (0x0021, 2)
+    # OCP is 3 decimal places, matching CURRENT's amperage-display format (the user
+    # manual's display-resolution table gives <10A: 1mA steps) -- not 2 like
+    # voltage/OVP. Confirmed against a real unit: raw register 150 read back as
+    # 0.150 A on the panel, not 1.50 A.
+    assert (OCP.address, OCP.decimals) == (0x0021, 3)
     assert (OPP.address, OPP.decimals, OPP.words) == (0x0022, 2, 2)
     assert (POWER_DISPLAY.address, POWER_DISPLAY.decimals, POWER_DISPLAY.words) == (0x0012, 3, 2)
+
+
+def test_ocp_scale_matches_panel_reading():
+    # Confirmed against real hardware: writing raw register 150 to 0x0021 shows as
+    # 0.150 A on the front panel (3 decimals), not 1.50 A (2 decimals).
+    assert OCP.to_raw(0.150) == 150
+    assert OCP.from_raw(150) == pytest.approx(0.150)
 
 
 def test_scaled_register_is_frozen():
