@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hm310t"
-version = "0.1.1"
+version = "0.1.2"
 description = "Control a Hanmatek HM310T bench power supply over Modbus RTU"
 readme = "README.md"
 license = "MIT"
