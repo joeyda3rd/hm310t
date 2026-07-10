@@ -8,12 +8,18 @@ the in-memory FakeTransport instead of a real device.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 from conftest import managed_power_supply
 from test_client import FakeTransport
 
 import hm310t.client
 from hm310t import PowerSupply, PowerSupplyCommunicationError
+
+pytest_plugins = ["pytester"]
+
+_CONFTEST_SOURCE = pathlib.Path(__file__).parent.joinpath("conftest.py").read_text()
 
 OUTPUT = 0x0001
 SET_VOLTAGE = 0x0030
@@ -94,3 +100,43 @@ def test_managed_supply_skips_setpoint_restore_when_teardown_force_off_fails(mon
     assert (OUTPUT, [1]) not in transport.write_log  # output was never re-enabled
     assert transport.registers[OUTPUT] == 0  # device left physically off
     assert transport.closed
+
+
+def _assert_power_supply_fixture_outcome(pytester, exc_name, **expected_outcomes):
+    """Run the real ``power_supply`` fixture in an isolated pytest process against a
+    PowerSupply() constructor that always raises ``exc_name``, and assert the
+    resulting pass/skip/error outcome."""
+    pytester.makeconftest(_CONFTEST_SOURCE)
+    pytester.makepyfile(f"""
+        import pytest
+        from hm310t import {exc_name}
+
+        @pytest.fixture(autouse=True)
+        def _make_powersupply_raise(monkeypatch):
+            import conftest
+
+            def _raise(*args, **kwargs):
+                raise {exc_name}("simulated")
+
+            monkeypatch.setattr(conftest, "PowerSupply", _raise)
+
+        def test_dummy(power_supply):
+            pass
+        """)
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(**expected_outcomes)
+
+
+def test_power_supply_fixture_skips_on_communication_error(pytester):
+    # The ordinary "nothing plugged in" case must still skip cleanly.
+    _assert_power_supply_fixture_outcome(
+        pytester, "PowerSupplyCommunicationError", skipped=1
+    )
+
+
+def test_power_supply_fixture_fails_loudly_on_incompatible_device(pytester):
+    # A wrong-model/firmware device (or any other constructor bug) must fail the
+    # test, not be swallowed as "no device reachable."
+    _assert_power_supply_fixture_outcome(
+        pytester, "IncompatibleDeviceError", errors=1
+    )
