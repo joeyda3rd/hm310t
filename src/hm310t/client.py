@@ -140,6 +140,12 @@ class PowerSupply:
         if not low <= value <= high:
             raise OutOfRangeError(f"{name} must be between {low} and {high}, got {value}")
         raw = register.to_raw(value)
+        # A limit with more precision than the register holds (e.g. voltage_limit=5.009
+        # against a 2dp register) can let `value` pass the check above yet still round to
+        # a raw word past the limit (501 -> 5.01 V). Re-check the value the device will
+        # actually see post-rounding, not just the caller's unrounded float.
+        if not low <= register.from_raw(raw) <= high:
+            raise OutOfRangeError(f"{name} must be between {low} and {high}, got {value}")
         if register.words == 1:
             self._transport.write_register(register.address, raw)
         else:

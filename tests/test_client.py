@@ -302,6 +302,23 @@ def test_constructor_rejects_limits_above_device_rating(fake_transports):
         PowerSupply(port="fake", current_limit=20.0)
 
 
+def test_voltage_setter_rejects_value_that_rounds_above_fractional_limit(fake_transports):
+    # voltage_limit=5.009 has more precision than the register's 2dp resolution.
+    # A request at exactly that limit must not round UP to raw 501 (5.01 V) and write it.
+    psu = PowerSupply(port="fake", voltage_limit=5.009)
+    with pytest.raises(OutOfRangeError):
+        psu.voltage = 5.009
+    assert fake_transports[0].write_log == []
+
+
+def test_current_setter_rejects_value_that_rounds_above_fractional_limit(fake_transports):
+    # current_limit=1.2349 has more precision than the register's 3dp resolution.
+    psu = PowerSupply(port="fake", current_limit=1.2349)
+    with pytest.raises(OutOfRangeError):
+        psu.current = 1.2349
+    assert fake_transports[0].write_log == []
+
+
 def test_setter_write_failure_propagates(psu, fake_transports):
     # Bug #8 at the client layer: a transport write failure must raise, never be swallowed.
     fake_transports[0].fail_writes = True
