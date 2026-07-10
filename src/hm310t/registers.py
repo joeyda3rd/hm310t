@@ -49,5 +49,7 @@ CURRENT = ScaledRegister(0x0031, decimals=3)
 
 # Protection trip points
 OVP = ScaledRegister(0x0020, decimals=2)
-OCP = ScaledRegister(0x0021, decimals=2)  # 2dp like voltage/OVP -- not 3 like current (spec bug #5)
+OCP = ScaledRegister(
+    0x0021, decimals=3
+)  # 3dp like current (amperage display), not 2 like voltage/OVP
 OPP = ScaledRegister(0x0022, decimals=2, words=2)

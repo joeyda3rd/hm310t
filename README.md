@@ -127,8 +127,9 @@ This library is licensed under the MIT license.
 ---
 ## Further Reading
 
-When reverse engineering a power supply with a modbus interface, either over serial or other communication protocol, it's going to be essential to know the register addresses for the various I/O and the function code. In this case, we got lucky and the OEM provided that documentation. 
-It's possible to learn these by using a script to brute force read and write (and read) each address from 1 to 9999 (see `tools/scan_registers.py` in code) and/or sniffing the unencrypted traffic of OEM software. It's important to understand the Modbus protocol register addressing. 
+When reverse engineering a power supply with a modbus interface, either over serial or other communication protocol, it's going to be essential to know the register addresses for the various I/O and the function code. In this case, we got lucky and the OEM provided that documentation, so we didn't need to fully reverse engineer it ourselves.
+
+Without OEM docs, the general approach is to brute-force scan a wide address range (read, write a test value, read back) and/or sniff the unencrypted serial traffic of the OEM's own control software. This repo's own tools are narrower than that, since we didn't need a full discovery scan: `tools/scan_registers.py` is **read-only** and dumps only the 16 already-documented addresses (for spot-checking a suspect unit, not discovery). `tools/characterize.py` goes further -- it writes test values to confirm scaling and byte order, and sweeps the small `0x0000`-`0x0040` range to flag any undocumented responders -- but that's still a bounded sweep, not a 1-9999 scan. It's important to understand the Modbus protocol register addressing. 
 
 In the Modbus protocol, there are four types of data that can be accessed, each with its own address space:
 
@@ -141,6 +142,8 @@ Each of these address spaces can contain up to 10,000 addresses, for a total of 
 
 It's also worth noting that in the Modbus protocol, addresses are often represented in a zero-based format. For example, the first holding register is often referred to as register 40001 in documentation, but in the actual Modbus messages, it would be referred to as holding register 0.
 
+**In this codebase specifically**, every address you'll see -- in `registers.py`, the table below, or a raw `pymodbus` call -- is already the zero-based, function-code-relative form (e.g. `0x0010`), never the `4xxxx`-offset style some vendor docs use. You will not need to add or subtract an offset when reading this code.
+
 In our case the entirety of the registers we accessed were in the holding registers space. The use of holding registers is common in Modbus devices, including power supplies, because holding registers can be read from and written to, making them versatile for various types of data. However, it's not guaranteed that every Modbus power supply will only use holding registers.
 
 The specific Modbus registers used, and their purpose, can vary widely between different devices and manufacturers. Some devices might use input registers to provide read-only data, or coils and discrete inputs for binary data.
@@ -151,9 +154,10 @@ It's important to know what programming protocol and communication protocol are 
 
 [Documentation provided by the OEM](OEM-docs/Modbus.pdf) (This was included on a CD provided by OEM)
 
-The registers will accept read (03) and write (06) instructions.
+The registers will accept read (03) and write (06) instructions -- **and also FC16 (write-multiple-registers), despite the doc's cover page claiming otherwise.** See "Known OEM documentation errors" below.
 
-Registers from documentation
+#### Register table (from the OEM doc, reconciled against hardware)
+
 | Number | Function | Type | Decimal Places Capacity | Read/Write | Register Address |
 | ------ | -------- | ---- | ----------------------- | ---------- | ---------------- |
 | 0 | Output On/Off | Boolean | 0 | r,w | 0x0001 |
@@ -163,21 +167,24 @@ Registers from documentation
 | 4 | Decimal Point Values | hexadecimal | 0 | r | 0x0005 |
 | 5 | Voltage Display Value | unsigned short | 2 | r | 0x0010 |
 | 6 | Current Display Value | unsigned short | 3 | r | 0x0011 |
-| 7 | Power Display Value | 2 integers? | 3 | r | 0x0012,0x0013 |
+| 7 | Power Display Value | 2×16-bit, high word first | 3 | r | 0x0012,0x0013 |
 | 9 | Set Voltage | unsigned short | 2 | r,w | 0x0030 |
 | 10 | Set Current | unsigned short | 3 | r,w | 0x0031 |
 | 12 | Set OVP | unsigned short | 2 | r,w | 0x0020 |
-| 13 | Set OCP | unsigned short | 2 | r,w | 0x0021 |
-| 14 | Set OPP | unsigned short? | 2 | r,w | 0x0022,0x0023 |
+| 13 | Set OCP | unsigned short | **3** (#13) | r,w | 0x0021 |
+| 14 | Set OPP | 2×16-bit, high word first | 2 | r,w | 0x0022,0x0023 |
 | 15 | Set Comm Address | byte (1-250) | 0 |  r,w | 0x9999 |
 
+Register numbers 8 and 11 don't appear anywhere in the OEM doc -- not a transcription gap on our part. The doc's own footer note ("the red serial number part is public, the blue serial number part is programmable private, the black serial number part is optional") implies the vendor's internal numbering has entries this public doc doesn't disclose.
+
 **Notes**  
-#1 See bit field below from documentation.   
-#3 no idea  
-#4 when it's reading 0x0233 that equals voltage has 2 decimal places, current 3, power 3  
-#7, #14 Two 16 bit registers are used to make one 32 bit value.  
-#14 type (range as it's called in docs) says 0-65535 (unsigned short) but I question that since it's a combination of two registers like #7
-#15 docs say the range is 1-250, not sure of the best type to use for that, although not using a type in python. 
+#1 Bit layout is below. Not independently hardware-verified -- confirming each bit would mean deliberately tripping each protection, which this project's test suite deliberately does not do. Treat `.tripped` as advisory, not a safety interlock (see "Known limitations" above).  
+#3 Semantics genuinely unknown -- the doc names the register but never explains what the value means. Still reachable via `PowerSupply.read_raw_register(0x0004)` if you ever want to poke at it.  
+#4 When it reads `0x0233`: voltage 2 decimal places, current 3, power 3. Exact bit-packing, per the doc's own Note 2: `(voltage_dp << 8) | (current_dp << 4) | (power_dp << 0)`. Checked at connect time in `client.py`'s `_check_decimal_capacity` -- a device reporting anything else raises `IncompatibleDeviceError` rather than silently producing wrong values.  
+#7, #14 Two 16-bit registers combine into one 32-bit value, **high word first** (0x0012/0x0022 hold the high 16 bits, 0x0013/0x0023 the low). Confirmed both by the doc's own column labels and a hardware round-trip test (`test_opp_uses_high_word_first_register_order`).  
+#13 **The table says 2 decimal places for OCP -- wrong.** It's 3, matching CURRENT's convention, not OVP/voltage's. Confirmed against real hardware two ways: raw register 150 (intended as 1.50 A under a 2dp reading) displayed as `0.150` on the panel; and setting OCP to `2.010` from the panel round-tripped through the raw register as `2010`, only consistent with 3dp (2010 / 1000 = 2.01; 2dp would give 20.1, nowhere close to what was dialed in). See "Known OEM documentation errors" below.  
+#14 Range `0-65535` (unsigned short) is suspect -- OPP is a 32-bit value across two registers, so a real range needs more than 16 bits. The power-display register (row 7, also 2 registers) has the identical `0-65535` range, suggesting this column was copy-pasted down rather than individually verified per row.  
+#15 Range is 1-250. `client.py` validates this as a plain Python `int` in that range (rejecting `bool`, floats, and anything outside 1-250) -- no separate typed representation needed.
 
 ```
 // protection status bit
@@ -195,6 +202,18 @@ union _ST
   uint8_t Dat;
 ｝
 ```
+
+### Known OEM documentation errors
+
+`OEM-docs/Modbus.pdf` is the only register-level spec we have, but it contradicts itself in several places, confirmed by reading it closely and cross-checking against real hardware. Treat these as settled, not open questions:
+
+1. **Supported function codes.** Page 1: "this product just supports function codes: 03, 06." Page 3's own Table 8.1 lists function code 10 (write-multiple-registers, i.e. FC16) as a supported operation, and OPP/32-bit writes are verified working via FC16 against a real unit (see "Known limitations" above). The cover-page claim is wrong; trust Table 8.1 and the hardware.
+2. **Slave address range.** The general frame-structure intro (page 1) says the address range is "1 to 15 (decimal)." Section 1.1 "Address Code" (page 3) says "ranging from 1 to 250," matching the register table's own RS-Adder row ("1~250"). The code uses 1-250, matching the more specific, later section and the register's own documented range -- not the vague intro line.
+3. **OCP decimal places.** The register table lists OCP (0x0021) as 2 decimal places. Confirmed wrong against real hardware -- see note #13 above. It's 3, matching CURRENT's amperage-domain convention.
+4. **OPP's "range" column (0-65535).** OPP is a 32-bit value spanning two registers (0x0022 high, 0x0023 low), so a real range would need more than 16 bits. This looks copy-pasted from the single-register rows above it -- the power-display register (also 2 registers) has the identical suspect `0-65535` range in row 7.
+5. **The page-5 worked example (function code 03 read) is internally inconsistent with the register table on the same page.** It shows raw `0x01F4` (500 decimal) at the current-display register as "5.00A" and raw `0x3A98` (15000 decimal) at the power-display register as "150.00W" -- both computed with 2 decimal places. But the table two pages earlier declares current and power display are 3 decimal places, which would give 0.500A and 15.000W instead. The example also treats power as a single 16-bit register, despite the table correctly noting it spans two (0x0012 high, 0x0013 low). The example section appears to be generic boilerplate the OEM didn't fully adapt for this product -- don't use it as a reference; use the register table plus Note 2's bit-packing formula for 0x0005 instead, both of which are internally consistent and match real hardware.
+
+**Takeaway:** register *addresses* in the OEM doc are reliable (cross-checked against real hardware throughout this library's development), but decimal-place counts, ranges, and worked examples are not uniformly trustworthy -- verify against a real unit before depending on anything not already covered above.
 
 Some previous work on the topic
 
