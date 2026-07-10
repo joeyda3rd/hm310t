@@ -151,7 +151,7 @@ It's important to know what programming protocol and communication protocol are 
 
 [Documentation provided by the OEM](OEM-docs/Modbus.pdf) (This was included on a CD provided by OEM)
 
-The registers will accept read (03) and write (06) instructions.
+The registers will accept read (03) and write (06) instructions -- **and also FC16 (write-multiple-registers), despite the doc's cover page claiming otherwise.** See "Known OEM documentation errors" below.
 
 Registers from documentation
 | Number | Function | Type | Decimal Places Capacity | Read/Write | Register Address |
@@ -167,7 +167,7 @@ Registers from documentation
 | 9 | Set Voltage | unsigned short | 2 | r,w | 0x0030 |
 | 10 | Set Current | unsigned short | 3 | r,w | 0x0031 |
 | 12 | Set OVP | unsigned short | 2 | r,w | 0x0020 |
-| 13 | Set OCP | unsigned short | 2 | r,w | 0x0021 |
+| 13 | Set OCP | unsigned short | **3** † | r,w | 0x0021 |
 | 14 | Set OPP | unsigned short? | 2 | r,w | 0x0022,0x0023 |
 | 15 | Set Comm Address | byte (1-250) | 0 |  r,w | 0x9999 |
 
@@ -176,8 +176,9 @@ Registers from documentation
 #3 no idea  
 #4 when it's reading 0x0233 that equals voltage has 2 decimal places, current 3, power 3  
 #7, #14 Two 16 bit registers are used to make one 32 bit value.  
-#14 type (range as it's called in docs) says 0-65535 (unsigned short) but I question that since it's a combination of two registers like #7
+#14 type (range as it's called in docs) says 0-65535 (unsigned short) but I question that since it's a combination of two registers like #7 -- confirmed: the OEM doc's own row-7 range for the (also 2-register) power display is the same suspect `0-65535`, so this column looks copy-pasted across rows rather than individually verified.
 #15 docs say the range is 1-250, not sure of the best type to use for that, although not using a type in python. 
+† **The OEM doc's own table says 2 decimal places for OCP -- this is wrong.** Confirmed against a real unit two ways: (1) writing raw register value 150 (intended as 1.50 A under a 2dp reading) displayed as `0.150` on the front panel; (2) setting OCP to `2.010` from the front panel and reading the raw register back gave `2010`, which is only consistent with 3 decimal places (2010 / 1000 = 2.01), not 2 (2010 / 100 = 20.1, nowhere close to what was dialed in). OCP shares CURRENT's 3dp convention, not OVP/voltage's 2dp -- makes sense since it's a current-domain quantity, but the OEM table lists it in a block with OVP/OPP that are uniformly 2dp, apparently without individually verifying OCP against hardware. See "Known OEM documentation errors" below.
 
 ```
 // protection status bit
@@ -195,6 +196,18 @@ union _ST
   uint8_t Dat;
 ｝
 ```
+
+### Known OEM documentation errors
+
+`OEM-docs/Modbus.pdf` is the only register-level spec we have, but it contradicts itself in several places, confirmed by reading it closely and cross-checking against real hardware. Treat these as settled, not open questions:
+
+1. **Supported function codes.** Page 1: "this product just supports function codes: 03, 06." Page 3's own Table 8.1 lists function code 10 (write-multiple-registers, i.e. FC16) as a supported operation, and OPP/32-bit writes are verified working via FC16 against a real unit (see "Known limitations" above). The cover-page claim is wrong; trust Table 8.1 and the hardware.
+2. **Slave address range.** The general frame-structure intro (page 1) says the address range is "1 to 15 (decimal)." Section 1.1 "Address Code" (page 3) says "ranging from 1 to 250," matching the register table's own RS-Adder row ("1~250"). The code uses 1-250, matching the more specific, later section and the register's own documented range -- not the vague intro line.
+3. **OCP decimal places.** The register table lists OCP (0x0021) as 2 decimal places. Confirmed wrong against real hardware -- see note † above. It's 3, matching CURRENT's amperage-domain convention.
+4. **OPP's "range" column (0-65535).** OPP is a 32-bit value spanning two registers (0x0022 high, 0x0023 low), so a real range would need more than 16 bits. This looks copy-pasted from the single-register rows above it -- the power-display register (also 2 registers) has the identical suspect `0-65535` range in row 7.
+5. **The page-5 worked example (function code 03 read) is internally inconsistent with the register table on the same page.** It shows raw `0x01F4` (500 decimal) at the current-display register as "5.00A" and raw `0x3A98` (15000 decimal) at the power-display register as "150.00W" -- both computed with 2 decimal places. But the table two pages earlier declares current and power display are 3 decimal places, which would give 0.500A and 15.000W instead. The example also treats power as a single 16-bit register, despite the table correctly noting it spans two (0x0012 high, 0x0013 low). The example section appears to be generic boilerplate the OEM didn't fully adapt for this product -- don't use it as a reference; use the register table plus Note 2's bit-packing formula for 0x0005 instead, both of which are internally consistent and match real hardware.
+
+**Takeaway:** register *addresses* in the OEM doc are reliable (cross-checked against real hardware throughout this library's development), but decimal-place counts, ranges, and worked examples are not uniformly trustworthy -- verify against a real unit before depending on anything not already covered above.
 
 Some previous work on the topic
 
