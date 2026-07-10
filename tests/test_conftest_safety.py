@@ -129,14 +129,10 @@ def _assert_power_supply_fixture_outcome(pytester, exc_name, **expected_outcomes
 
 def test_power_supply_fixture_skips_on_communication_error(pytester):
     # The ordinary "nothing plugged in" case must still skip cleanly.
-    _assert_power_supply_fixture_outcome(
-        pytester, "PowerSupplyCommunicationError", skipped=1
-    )
+    _assert_power_supply_fixture_outcome(pytester, "PowerSupplyCommunicationError", skipped=1)
 
 
 def test_power_supply_fixture_fails_loudly_on_incompatible_device(pytester):
     # A wrong-model/firmware device (or any other constructor bug) must fail the
     # test, not be swallowed as "no device reachable."
-    _assert_power_supply_fixture_outcome(
-        pytester, "IncompatibleDeviceError", errors=1
-    )
+    _assert_power_supply_fixture_outcome(pytester, "IncompatibleDeviceError", errors=1)
