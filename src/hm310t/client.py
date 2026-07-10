@@ -85,7 +85,10 @@ class PowerSupply:
         except BaseException:
             # Spec bug #1: never leak the serial handle if connect or post-connect
             # verification fails partway (close() is safe on a never-opened port).
-            self._transport.close()
+            try:
+                self._transport.close()
+            except Exception:
+                pass  # comms are already broken; don't mask the real init failure
             raise
 
     def _check_decimal_capacity(self) -> None:
@@ -273,4 +276,9 @@ class PowerSupply:
                 except Exception:
                     pass  # comms may be down; don't shadow the exception being raised
         finally:
-            self.close()
+            try:
+                self.close()
+            except Exception:
+                if exc_type is None:
+                    raise  # clean exit: nothing to protect, surface the close failure
+                # else: an exception is already unwinding -- don't replace it

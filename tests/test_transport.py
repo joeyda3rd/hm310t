@@ -99,6 +99,14 @@ def test_writes_use_configured_slave(mock_client):
     mock_client.write_register.assert_called_with(0x0030, 500, slave=3)
 
 
+def test_close_exception_raises_typed_error(mock_client):
+    # close() was the one I/O method that didn't wrap failures (bug #2) -- a raw
+    # OSError from the serial handle must surface as our own typed error too.
+    mock_client.close.side_effect = OSError("device unplugged")
+    with pytest.raises(PowerSupplyCommunicationError):
+        Transport("/dev/ttyUSB0").close()
+
+
 def test_no_dead_method_kwarg(monkeypatch):
     # Spec bug #6: method='rtu' is not a real ModbusSerialClient parameter in pymodbus 3.2.2.
     ctor = MagicMock(return_value=MagicMock())

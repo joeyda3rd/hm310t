@@ -189,6 +189,44 @@ def test_context_manager_closes_transport(fake_transports):
     assert fake_transports[0].closed
 
 
+class RaisingCloseTransport(FakeTransport):
+    """A Transport whose close() itself fails (e.g. serial handle already gone)."""
+
+    def close(self):
+        raise PowerSupplyCommunicationError("simulated close failure")
+
+
+def test_init_close_failure_does_not_mask_original_error(monkeypatch):
+    # P2: if close() raises while unwinding from a verification failure, the
+    # ORIGINAL error (wrong spec) must still be what's raised, not the close failure.
+    class WrongSpecRaisingClose(RaisingCloseTransport):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.registers[0x0003] = 3005
+
+    monkeypatch.setattr(hm310t.client, "Transport", WrongSpecRaisingClose)
+    with pytest.raises(IncompatibleDeviceError):
+        PowerSupply(port="fake")
+
+
+def test_exit_close_failure_does_not_mask_original_error(monkeypatch):
+    # An exception unwinding out of the `with` block must survive even if the
+    # __exit__ close() call itself raises.
+    monkeypatch.setattr(hm310t.client, "Transport", RaisingCloseTransport)
+    with pytest.raises(RuntimeError):
+        with PowerSupply(port="fake"):
+            raise RuntimeError("boom")
+
+
+def test_exit_close_failure_propagates_on_clean_exit(monkeypatch):
+    # No original exception to protect here, so a close failure on a clean exit
+    # must still surface -- it must not be silently swallowed.
+    monkeypatch.setattr(hm310t.client, "Transport", RaisingCloseTransport)
+    with pytest.raises(PowerSupplyCommunicationError):
+        with PowerSupply(port="fake"):
+            pass
+
+
 def test_voltage_setpoint_write_rounds_not_truncates(psu, fake_transports):
     # Spec bug #7: 0.29 * 100 == 28.999999999999996; int() writes 28, round() writes 29.
     psu.voltage = 0.29
