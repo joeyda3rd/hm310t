@@ -311,6 +311,11 @@ def test_comm_address_setter_retargets_transport(psu, fake_transports):
     assert fake_transports[0].slave == 5
 
 
+def test_comm_address_read(psu, fake_transports):
+    fake_transports[0].registers[0x9999] = 7
+    assert psu.comm_address == 7
+
+
 def test_read_raw_register_escape_hatch(psu, fake_transports):
     fake_transports[0].registers[0x0004] = 1234
     assert psu.read_raw_register(0x0004) == 1234
@@ -407,3 +412,27 @@ def test_exit_leaves_output_untouched_on_clean_exit(fake_transports):
     output_writes = [value for addr, value in transport.write_log if addr == 0x0001]
     assert output_writes == [[1]]  # only the deliberate enable; teardown added nothing
     assert transport.closed
+
+
+def test_exit_output_off_failure_does_not_mask_original_error(monkeypatch):
+    # __exit__'s fail-safe output-off attempt is itself allowed to fail (comms may
+    # already be down): the original exception unwinding out of the `with` block
+    # must survive, and close() must still run.
+    class OutputOffFails(FakeTransport):
+        def write_register(self, address, value):
+            if address == 0x0001 and value == 0:
+                raise PowerSupplyCommunicationError("simulated output-off failure")
+            return super().write_register(address, value)
+
+    created = []
+
+    def factory(*args, **kwargs):
+        transport = OutputOffFails(*args, **kwargs)
+        created.append(transport)
+        return transport
+
+    monkeypatch.setattr(hm310t.client, "Transport", factory)
+    with pytest.raises(RuntimeError):
+        with PowerSupply(port="fake"):
+            raise RuntimeError("boom")
+    assert created[0].closed
