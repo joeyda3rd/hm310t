@@ -78,7 +78,7 @@ with PowerSupply(port="/dev/ttyUSB0") as psu:
     psu.output_enabled = False
 ```
 
-Runnable examples live in [`examples/`](examples): `basic_usage.py` (the script above, hardened) and `tui_dashboard.py`, a small curses dashboard.
+Runnable examples live in [`examples/`](examples): `basic_usage.py` (the script above, hardened) and `tui_dashboard.py`, a small curses control panel with live editable setpoints and protection-status feedback.
 
 <img src="https://raw.githubusercontent.com/joeyda3rd/hm310t/main/images/screenshot-psui.jpg" width="500">
 
