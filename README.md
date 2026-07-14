@@ -1,4 +1,4 @@
-# Hanmatek Modbus Power Supply Python Library
+# Hanmatek HM310T Modbus Power Supply Python Library
 
 This repository contains a Python library to interact with the Hanmatek HM310T power supply over the Modbus interface.  
 Learn how this is accomplished for interacting with similar devices below in [#further reading](#further-reading).  
