@@ -47,7 +47,8 @@ jobs:
               version = tomllib.load(project_file)["project"]["version"]
           if tag != f"v{version}":
               raise SystemExit(f"tag {tag!r} does not match package version v{version}")
-          print(f"tag={tag}" >> os.environ["GITHUB_OUTPUT"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output_file:
+              print(f"tag={tag}", file=output_file)
           PY
 
       - name: Install package and verification tools
