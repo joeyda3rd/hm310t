@@ -16,7 +16,11 @@ from hm310t import PowerSupply
 def main() -> None:
     # port, baudrate=9600, slave=1, voltage_limit=30.0, current_limit=10.0
     with PowerSupply(port="/dev/ttyUSB0") as psu:
-        # Set protection trip points FIRST, while the output is still off.
+        # Connecting preserves output state, so explicitly turn it off before
+        # changing any setting. A pre-existing live output must not be reconfigured.
+        psu.output_enabled = False
+
+        # Set protection trip points first, while the output is off.
         psu.ovp = 6.0
         psu.ocp = 0.1
         psu.opp = 5.0

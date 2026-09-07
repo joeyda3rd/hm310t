@@ -52,15 +52,16 @@ def main() -> None:
     except Exception as exc:
         sys.exit(f"Could not open a HM310T on {PORT}: {exc}")
 
-    if psu.output_enabled:
-        psu.close()
-        sys.exit("OUTPUT IS ON -- aborting; disable it before running the write smoke.")
-
-    baseline = {name: getattr(psu, name) for name in SNAPSHOT_ATTRS}
-    print(f"Connected on {PORT}. Output off. Baseline captured; will restore on exit.\n")
-
+    baseline = None
     results: list[bool] = []
+    restore_errors: list[str] = []
     try:
+        if psu.output_enabled:
+            sys.exit("OUTPUT IS ON -- aborting; disable it before running the write smoke.")
+
+        baseline = {name: getattr(psu, name) for name in SNAPSHOT_ATTRS}
+        print(f"Connected on {PORT}. Output off. Baseline captured; will restore on exit.\n")
+
         for name, value, decimals in CHECKS:
             try:
                 setattr(psu, name, value)
@@ -73,20 +74,23 @@ def main() -> None:
                 print(f"  [FAIL] {name:8} wrote {value:<7} raised {exc!r}")
             results.append(ok)
     finally:
-        restore_errors = []
-        for name in SNAPSHOT_ATTRS:
-            try:
-                setattr(psu, name, baseline[name])
-                time.sleep(PACING_S)  # pace the restore writes too (FC16 opp included)
-            except Exception as exc:
-                restore_errors.append(f"{name}: {exc!r}")
-        psu.close()
+        if baseline is not None:
+            for name in SNAPSHOT_ATTRS:
+                try:
+                    setattr(psu, name, baseline[name])
+                    time.sleep(PACING_S)  # pace the restore writes too (FC16 opp included)
+                except Exception as exc:
+                    restore_errors.append(f"{name}: {exc!r}")
+        try:
+            psu.close()
+        except Exception as exc:
+            restore_errors.append(f"close: {exc!r}")
         if restore_errors:
-            print(f"\nWARNING: could not fully restore baseline: {restore_errors}", file=sys.stderr)
+            print(f"\nFAIL: could not fully restore baseline: {restore_errors}", file=sys.stderr)
 
     passed = sum(results)
     print(f"\n{passed}/{len(results)} write round-trips verified.")
-    if passed != len(results):
+    if passed != len(results) or restore_errors:
         sys.exit(1)
     print("SMOKE PASS")
 

@@ -75,8 +75,8 @@ class PowerSupply:
             raise TypeError(f"slave must be an int, got {type(slave).__name__}")
         if not 1 <= slave <= 250:
             raise OutOfRangeError(f"slave must be between 1 and 250, got {slave}")
-        self.voltage_limit = voltage_limit
-        self.current_limit = current_limit
+        self._voltage_limit = voltage_limit
+        self._current_limit = current_limit
         self._transport = Transport(port, baudrate=baudrate, slave=slave)
         try:
             self._transport.connect()
@@ -90,6 +90,16 @@ class PowerSupply:
             except Exception:
                 pass  # comms are already broken; don't mask the real init failure
             raise
+
+    @property
+    def voltage_limit(self) -> float:
+        """Maximum voltage setpoint allowed by this instance's software ceiling."""
+        return self._voltage_limit
+
+    @property
+    def current_limit(self) -> float:
+        """Maximum current setpoint allowed by this instance's software ceiling."""
+        return self._current_limit
 
     def _check_decimal_capacity(self) -> None:
         """Register 0x0005 reports the device's real display precision (e.g. 0x0233 =

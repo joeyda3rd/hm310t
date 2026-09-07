@@ -136,3 +136,21 @@ def test_no_dead_method_kwarg(monkeypatch):
     monkeypatch.setattr(hm310t.transport, "ModbusSerialClient", ctor)
     Transport("/dev/ttyUSB0", baudrate=115200)
     assert "method" not in ctor.call_args.kwargs
+
+
+def test_constructor_passes_default_serial_configuration(monkeypatch):
+    ctor = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(hm310t.transport, "ModbusSerialClient", ctor)
+
+    Transport("/dev/ttyUSB0")
+
+    assert ctor.call_args.kwargs == {"port": "/dev/ttyUSB0", "baudrate": 9600, "timeout": 1.0}
+
+
+def test_constructor_passes_explicit_serial_configuration(monkeypatch):
+    ctor = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(hm310t.transport, "ModbusSerialClient", ctor)
+
+    Transport("/dev/ttyUSB1", baudrate=115200, slave=2, timeout=2.0)
+
+    assert ctor.call_args.kwargs == {"port": "/dev/ttyUSB1", "baudrate": 115200, "timeout": 2.0}

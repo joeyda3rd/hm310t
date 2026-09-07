@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-build:
+    name: Verify and build
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release-tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check tag and package version agree
+        id: release-tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+
+          tag = os.environ["RELEASE_TAG"]
+          with open("pyproject.toml", "rb") as project_file:
+              version = tomllib.load(project_file)["project"]["version"]
+          if tag != f"v{version}":
+              raise SystemExit(f"tag {tag!r} does not match package version v{version}")
+          print(f"tag={tag}" >> os.environ["GITHUB_OUTPUT"]
+          PY
+
+      - name: Install package and verification tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy build pytest
+          pip install .
+
+      - name: Lint
+        run: ruff check src tests examples tools
+
+      - name: Verify formatting
+        run: ruff format --check src tests examples tools
+
+      - name: Type check
+        run: mypy src
+
+      - name: Run hardware-free tests
+        run: pytest -m "not hardware and not requires_load" -v
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Verify wheel contents
+        run: |
+          python -c "import glob, zipfile; w = glob.glob('dist/*.whl')[0]; assert 'hm310t/py.typed' in zipfile.ZipFile(w).namelist(), 'py.typed missing from wheel'"
+
+      - name: Upload release distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/hm310t
+    permissions:
+      id-token: write
+    steps:
+      - name: Download release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  create-github-release:
+    name: Create GitHub release
+    needs: [verify-and-build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.verify-and-build.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --generate-notes --title "$RELEASE_TAG"
+          fi

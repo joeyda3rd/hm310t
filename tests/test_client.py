@@ -19,6 +19,8 @@ class FakeTransport:
     """In-memory stand-in for hm310t.transport.Transport (same interface)."""
 
     def __init__(self, port, baudrate=9600, slave=1, timeout=1.0):
+        self.port = port
+        self.baudrate = baudrate
         self.slave = slave
         self.closed = False
         self.fail_reads = False
@@ -103,6 +105,22 @@ def test_init_checks_decimal_capacity_and_accepts_matching_device(fake_transport
 def test_init_checks_specification_register(fake_transports):
     PowerSupply(port="fake")
     assert (0x0003, 1) in fake_transports[0].read_log
+
+
+def test_constructor_passes_default_connection_settings_to_transport(fake_transports):
+    PowerSupply(port="fake")
+    transport = fake_transports[0]
+    assert transport.port == "fake"
+    assert transport.baudrate == 9600
+    assert transport.slave == 1
+
+
+def test_constructor_passes_explicit_connection_settings_to_transport(fake_transports):
+    PowerSupply(port="custom", baudrate=115200, slave=2)
+    transport = fake_transports[0]
+    assert transport.port == "custom"
+    assert transport.baudrate == 115200
+    assert transport.slave == 2
 
 
 def test_init_rejects_mismatched_specification(monkeypatch):
@@ -305,6 +323,24 @@ def test_protection_status_decodes_bits(psu, fake_transports):
     assert psu.read_protection_status().tripped is False
 
 
+@pytest.mark.parametrize(
+    ("bit", "attribute"),
+    [
+        (0x01, "is_ovp"),
+        (0x02, "is_ocp"),
+        (0x04, "is_opp"),
+        (0x08, "is_otp"),
+        (0x10, "is_scp"),
+    ],
+)
+def test_protection_status_decodes_each_documented_bit(psu, fake_transports, bit, attribute):
+    fake_transports[0].registers[0x0002] = bit
+    status = psu.read_protection_status()
+    assert getattr(status, attribute) is True
+    assert sum((status.is_ovp, status.is_ocp, status.is_opp, status.is_otp, status.is_scp)) == 1
+    assert status.tripped is True
+
+
 def test_comm_address_setter_retargets_transport(psu, fake_transports):
     psu.comm_address = 5
     assert fake_transports[0].write_log == [(0x9999, [5])]
@@ -345,6 +381,52 @@ def test_constructor_rejects_limits_above_device_rating(fake_transports):
         PowerSupply(port="fake", current_limit=20.0)
 
 
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("voltage_limit", 0.0),
+        ("current_limit", 0.0),
+        ("slave", 0),
+        ("slave", 251),
+    ],
+)
+def test_constructor_rejects_lower_limit_boundaries(fake_transports, keyword, value):
+    with pytest.raises(OutOfRangeError):
+        PowerSupply(port="fake", **{keyword: value})
+
+
+def test_constructor_accepts_limit_and_slave_upper_boundaries(fake_transports):
+    psu = PowerSupply(port="fake", voltage_limit=30.0, current_limit=10.0, slave=250)
+    assert psu.voltage_limit == 30.0
+    assert psu.current_limit == 10.0
+    assert fake_transports[0].slave == 250
+
+
+def test_constructor_accepts_one_volt_software_ceiling(fake_transports):
+    psu = PowerSupply(port="fake", voltage_limit=1.0)
+    assert psu.voltage_limit == 1.0
+
+
+def test_software_limits_are_read_only_and_cannot_bypass_setpoint_ceiling(
+    fake_transports,
+):
+    psu = PowerSupply(port="fake", voltage_limit=5.0, current_limit=1.0)
+    transport = fake_transports[0]
+    transport.write_log.clear()
+
+    assert psu.voltage_limit == 5.0
+    assert psu.current_limit == 1.0
+    with pytest.raises(AttributeError):
+        psu.voltage_limit = 100.0
+    with pytest.raises(AttributeError):
+        psu.current_limit = 100.0
+    with pytest.raises(OutOfRangeError):
+        psu.voltage = 40.0
+    with pytest.raises(OutOfRangeError):
+        psu.current = 2.0
+    assert transport.write_log == []
+
+
 def test_voltage_setter_rejects_value_that_rounds_above_fractional_limit(fake_transports):
     # voltage_limit=5.009 has more precision than the register's 2dp resolution.
     # A request at exactly that limit must not round UP to raw 501 (5.01 V) and write it.
@@ -360,6 +442,26 @@ def test_current_setter_rejects_value_that_rounds_above_fractional_limit(fake_tr
     with pytest.raises(OutOfRangeError):
         psu.current = 1.2349
     assert fake_transports[0].write_log == []
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("voltage", 0.0),
+        ("voltage", 30.0),
+        ("current", 0.0),
+        ("current", 10.0),
+        ("ovp", 0.0),
+        ("ovp", 30.0),
+        ("ocp", 0.0),
+        ("ocp", 10.0),
+        ("opp", 0.0),
+        ("opp", 300.0),
+    ],
+)
+def test_setpoints_accept_documented_range_boundaries(psu, fake_transports, name, value):
+    setattr(psu, name, value)
+    assert fake_transports[0].write_log
 
 
 def test_setter_write_failure_propagates(psu, fake_transports):

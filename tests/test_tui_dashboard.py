@@ -628,3 +628,26 @@ def test_main_loop_survives_a_communication_error_without_crashing(monkeypatch):
     tui_dashboard.main(screen)  # must not raise
 
     assert created[0].closed is True
+
+
+def test_main_initialization_interrupt_disables_output_and_closes(monkeypatch):
+    created = []
+
+    class EnabledTransport(FakeTransport):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.registers[0x0001] = 1
+            created.append(self)
+
+    monkeypatch.setattr(hm310t.client, "Transport", EnabledTransport)
+    monkeypatch.setattr(
+        tui_dashboard.Poller,
+        "read_once",
+        lambda self: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        tui_dashboard.main(FakeScreen([]))
+
+    assert created[0].registers[0x0001] == 0
+    assert created[0].closed is True

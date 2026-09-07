@@ -686,40 +686,56 @@ def main(stdscr: curses.window) -> None:
     if psu is None:
         return
 
-    stdscr.nodelay(True)  # non-blocking getch()
-    styles = _init_colors()
     lock = threading.Lock()
     poller = Poller(psu, lock)
     device = Device(psu, lock, poller)
+    poller_started = False
     try:
-        poller.read_once()
-        status = (
-            "Connected. Protection trip points shown below are whatever the device already had."
+        stdscr.nodelay(True)  # non-blocking getch()
+        styles = _init_colors()
+        try:
+            poller.read_once()
+            status = (
+                "Connected. Protection trip points shown below are whatever the device already had."
+            )
+        except HM310TError as exc:
+            # A comms blip right after connecting shouldn't crash the panel -- the
+            # background poller below retries automatically every cycle.
+            status = f"Could not read initial state ({exc}). Retrying automatically."
+        enabled_at = _initial_enabled_at(poller, time.monotonic())
+        if enabled_at is not None:
+            status = f"{status} Output was already on -- timer starts from now, not the true total."
+        state = PanelState(
+            selected=0,
+            place_index=2,  # matches the old fixed defaults (0.1 V, 0.01 A, 1 W)
+            status=status,
+            values=poller.values,
+            measurement=poller.measurement,
+            protection=poller.protection,
+            output_enabled=poller.output_enabled,
+            enabled_at=enabled_at,
+            disabled_at=None,
+            peak_voltage=poller.peak_voltage,
+            peak_current=poller.peak_current,
+            avg_voltage=poller.avg_voltage,
+            avg_current=poller.avg_current,
         )
-    except HM310TError as exc:
-        # A comms blip right after connecting shouldn't crash the panel -- the
-        # background poller below retries automatically every cycle.
-        status = f"Could not read initial state ({exc}). Retrying automatically."
-    enabled_at = _initial_enabled_at(poller, time.monotonic())
-    if enabled_at is not None:
-        status = f"{status} Output was already on -- timer starts from now, not the true total."
-    state = PanelState(
-        selected=0,
-        place_index=2,  # matches the old fixed defaults (0.1 V, 0.01 A, 1 W)
-        status=status,
-        values=poller.values,
-        measurement=poller.measurement,
-        protection=poller.protection,
-        output_enabled=poller.output_enabled,
-        enabled_at=enabled_at,
-        disabled_at=None,
-        peak_voltage=poller.peak_voltage,
-        peak_current=poller.peak_current,
-        avg_voltage=poller.avg_voltage,
-        avg_current=poller.avg_current,
-    )
+        poller.start()
+        poller_started = True
+    except BaseException:
+        # Initialization can block on serial I/O too. It needs the same fail-safe
+        # teardown as the event loop, even though the poller may not have started.
+        try:
+            with lock:
+                psu.output_enabled = False
+        except Exception:
+            pass
+        finally:
+            if poller_started:
+                poller.stop()
+            psu.close()
+        raise
 
-    poller.start()
     try:
         while True:
             was_enabled = state.output_enabled

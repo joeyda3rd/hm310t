@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-09-07
+
+### Fixed
+- `voltage_limit` and `current_limit` are now read-only as documented, so callers
+  cannot bypass the configured software ceiling after construction.
+- `examples/basic_usage.py` explicitly disables output before applying protection
+  or setpoint changes, preventing configuration of an already-live supply.
+- The curses dashboard now disables output and closes its connection when startup
+  is interrupted before its polling loop begins.
+- `tools/characterize.py` refuses to write without complete restorable snapshots,
+  disables output before restoration, isolates cleanup failures, and always tries
+  to close its connection.
+- `tools/smoke_write.py` exits unsuccessfully when it cannot fully restore the
+  captured baseline or close the connection.
+
+### Added
+- Hardware-free regression tests for the safety fixes, plus a targeted Mutmut
+  campaign for client and transport validation/error paths.
+- A tag-driven trusted-publishing release workflow and release instructions.
+
 ## [0.1.2] - 2026-07-10
 
 ### Fixed
