@@ -651,3 +651,148 @@ def test_main_initialization_interrupt_disables_output_and_closes(monkeypatch):
 
     assert created[0].registers[0x0001] == 0
     assert created[0].closed is True
+
+
+# ---- Unknown output state is never treated as "off" ------------------------
+
+
+class LostReplyTransport(FakeTransport):
+    """Applies writes, then raises as if the reply was lost on the wire."""
+
+    def write_register(self, address, value):
+        super().write_register(address, value)
+        raise PowerSupplyCommunicationError("simulated lost reply")
+
+
+def test_poller_output_state_is_unknown_before_the_first_successful_read(psu):
+    assert tui_dashboard.Poller(psu, threading.Lock()).output_enabled is None
+
+
+def test_render_shows_unknown_output_state(device):
+    state = replace(_base_state(device), output_enabled=None)
+    header = tui_dashboard._render(state, 0.0, 80)["header"]
+    assert "Output: UNKNOWN" in _text(header[2])
+
+
+def test_space_with_unknown_output_state_sends_off_not_on(psu, device, fake_transports):
+    fake_transports[0].registers[0x0001] = 1  # really on; the panel just doesn't know
+    state = replace(_base_state(device), output_enabled=None)
+    tui_dashboard._handle_key(state, device, ord(" "), FakeScreen([]))
+    assert fake_transports[0].registers[0x0001] == 0
+
+
+def test_lost_reply_on_enable_marks_output_state_unknown(monkeypatch):
+    monkeypatch.setattr(hm310t.client, "Transport", LostReplyTransport)
+    psu = PowerSupply(port="fake")
+    lock = threading.Lock()
+    poller = tui_dashboard.Poller(psu, lock)
+    poller.read_once()
+    device = tui_dashboard.Device(psu, lock, poller)
+
+    new_state = tui_dashboard._set_output(_base_state(device), device, True)
+
+    assert psu.output_enabled is True  # the write landed
+    assert new_state.output_enabled is None
+    assert poller.output_enabled is None
+
+
+def test_quit_prompts_when_output_state_is_unknown(monkeypatch):
+    created = []
+
+    def factory(port, baudrate=9600, slave=1, timeout=1.0):
+        transport = FlakyAfterConnectTransport(port, baudrate=baudrate, slave=slave)
+        transport.registers[0x0001] = 1  # really on, but every read after connect fails
+        created.append(transport)
+        return transport
+
+    monkeypatch.setattr(hm310t.client, "Transport", factory)
+    monkeypatch.setattr(tui_dashboard.time, "sleep", lambda seconds: None)
+
+    tui_dashboard.main(FakeScreen([ord("q"), ord("y")]))
+
+    assert created[0].registers[0x0001] == 0
+
+
+def test_failed_disable_on_quit_keeps_the_panel_open(monkeypatch, fake_transports):
+    monkeypatch.setattr(tui_dashboard.time, "sleep", lambda seconds: None)
+    screen = FakeScreen([ord(" "), ord("q"), ord("y"), ord("q"), ord("n")])
+    original_getch = screen.getch
+
+    def getch():
+        if screen._keys and screen._keys[0] == ord("y"):
+            fake_transports[0].fail_writes = True  # the quit-time disable will fail
+        return original_getch()
+
+    screen.getch = getch
+    tui_dashboard.main(screen)
+
+    assert screen._keys == []  # did not exit on the first q/y; needed the second q/n
+    assert fake_transports[0].closed is True
+
+
+def test_force_output_off_survives_a_repeated_ctrl_c(psu, fake_transports):
+    transport = fake_transports[0]
+    transport.registers[0x0001] = 1
+    original_write = transport.write_register
+    interrupts = [KeyboardInterrupt()]
+
+    def write_register(address, value):
+        if interrupts:
+            raise interrupts.pop()
+        original_write(address, value)
+
+    transport.write_register = write_register
+    tui_dashboard._force_output_off(threading.Lock(), psu)
+    assert transport.registers[0x0001] == 0
+
+
+# ---- Poll sync: edges compare against the last KNOWN output state -----------
+
+
+def test_sync_on_unknown_on_is_not_a_fresh_enable(device):
+    # ON for a while, then a failed OFF write made it unknown; the poll reads ON again.
+    device.poller.output_enabled = True
+    device.poller.peak_voltage = 7.0
+    state = replace(_base_state(device), output_enabled=None, enabled_at=100.0)
+    synced = tui_dashboard._sync_from_poller(state, device, True, 500.0)
+    assert synced.enabled_at == 100.0
+    assert synced.peak_voltage == 7.0
+    assert device.poller.peak_voltage == 7.0
+
+
+def test_sync_off_unknown_off_keeps_the_last_run_duration(device):
+    device.poller.output_enabled = False
+    state = replace(_base_state(device), output_enabled=None, enabled_at=100.0, disabled_at=200.0)
+    synced = tui_dashboard._sync_from_poller(state, device, False, 500.0)
+    assert synced.disabled_at == 200.0
+
+
+def test_sync_first_read_after_unreadable_startup_seeds_the_timer(device):
+    device.poller.output_enabled = True
+    state = replace(_base_state(device), output_enabled=None)
+    synced = tui_dashboard._sync_from_poller(state, device, None, 500.0)
+    assert synced.enabled_at == 500.0
+
+
+def test_sync_external_enable_resets_timer_and_headroom(device):
+    device.poller.output_enabled = True
+    device.poller.peak_voltage = 7.0
+    state = replace(_base_state(device), enabled_at=100.0, disabled_at=200.0)
+    synced = tui_dashboard._sync_from_poller(state, device, False, 500.0)
+    assert synced.enabled_at == 500.0
+    assert synced.peak_voltage == 0.0
+    assert device.poller.peak_voltage == 0.0
+    assert "detected externally" in synced.status
+
+
+def test_poll_failure_makes_a_known_output_state_unknown(device, fake_transports):
+    device.poller.output_enabled = False  # last good read said OFF...
+    fake_transports[0].read_registers = lambda address, count: (_ for _ in ()).throw(
+        PowerSupplyCommunicationError("simulated read failure")
+    )  # ...then comms drop, so a front-panel enable can't be seen
+    device.poller._stop.wait = lambda seconds: device.poller._stop.set()  # one cycle
+
+    device.poller._run()
+
+    assert device.poller.error == "simulated read failure"
+    assert device.poller.output_enabled is None

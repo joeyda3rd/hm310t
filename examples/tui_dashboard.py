@@ -103,7 +103,10 @@ class PanelState:
     locally-owned caches, since all of them can change on their own (a
     front-panel edit, a trip, another Modbus client). ``enabled_at``/
     ``disabled_at`` are this script's own clock for the on-time counter; the
-    device has no such register.
+    device has no such register. ``output_enabled`` is None when the output
+    state is NOT known (no successful read yet, or a write whose reply was lost)
+    -- never collapse that into False: off is the one answer that skips safety
+    prompts.
     """
 
     selected: int
@@ -112,7 +115,7 @@ class PanelState:
     values: dict[str, float]
     measurement: Measurement
     protection: ProtectionStatus
-    output_enabled: bool
+    output_enabled: bool | None
     enabled_at: float | None
     disabled_at: float | None
     peak_voltage: float
@@ -148,7 +151,7 @@ class Poller:
         self.values = {field.key: 0.0 for field in FIELDS}
         self.measurement = Measurement(0.0, 0.0, 0.0)
         self.protection = ProtectionStatus(False, False, False, False, False)
-        self.output_enabled = False
+        self.output_enabled: bool | None = None  # unknown until the first read succeeds
         self.error: str | None = None
         self.peak_voltage = 0.0
         self.peak_current = 0.0
@@ -200,6 +203,10 @@ class Poller:
                 self.error = None
             except PowerSupplyCommunicationError as exc:
                 self.error = str(exc)
+                # Can't see the device, so a front-panel change would go unnoticed:
+                # the last good reading is no longer known, and unknown isn't off.
+                with self._lock:
+                    self.output_enabled = None
             # wait() (not sleep()) so stop() interrupts a pending wait immediately,
             # and it times the gap from when THIS read finished, not when it started
             # -- a slow read can't compress the rest of the interval away.
@@ -362,6 +369,8 @@ def _render(state: PanelState, now: float, width: int) -> dict[str, list[Line]]:
         right_text = _fmt_duration(duration or 0.0)
         pad = max(width - len(left_text) - len(right_text), 1)
         header.append([(f"{left_text}{' ' * pad}{right_text}", STYLE_LIVE_BAR)])
+    elif state.output_enabled is None:
+        header.append([("Output: UNKNOWN -- may be ON (Space sends OFF)", STYLE_TRIPPED)])
     elif duration is not None:
         header.append([(f"Output: OFF   (last run {_fmt_duration(duration)})", STYLE_NORMAL)])
     else:
@@ -579,12 +588,17 @@ def _set_output(state: PanelState, device: Device, enabled: bool) -> PanelState:
     t0 = time.monotonic()
     try:
         with device.lock:
-            device.psu.output_enabled = enabled
+            try:
+                device.psu.output_enabled = enabled
+            except HM310TError:
+                # The write may have landed with only the reply lost -- unknown, not unchanged.
+                device.poller.output_enabled = None
+                raise
             device.poller.output_enabled = enabled
             if enabled:
                 device.poller.reset_headroom()
     except HM310TError as exc:
-        return replace(state, status=str(exc))
+        return replace(state, output_enabled=None, status=f"{exc} -- output state unknown")
     t1 = time.monotonic()
     # We can't know the device's own internal delay between receiving this write
     # and its state actually changing -- but assuming it happened at the midpoint
@@ -631,19 +645,25 @@ def _handle_key(state: PanelState, device: Device, key: int, stdscr: curses.wind
     if key in (10, 13, curses.KEY_ENTER):
         return _enter_value(state, field, device, stdscr)
     if key == ord(" "):  # a single, easy-to-find-blind toggle -- see module docstring
-        return _set_output(state, device, not state.output_enabled)
+        # Unknown state toggles to OFF: guessing "it's off" would send an enable.
+        return _set_output(state, device, state.output_enabled is False)
     return state
 
 
-def _maybe_disable_on_quit(stdscr: curses.window, device: Device, output_enabled: bool) -> None:
-    # Uses the last-known state rather than a fresh read: quitting must never crash
-    # on a comms blip, and output_enabled is kept current by the poller and by
-    # _set_output above.
-    if not output_enabled:
-        return
+def _maybe_disable_on_quit(
+    stdscr: curses.window, device: Device, output_enabled: bool | None
+) -> str | None:
+    """Returns None to go ahead and quit, or a status message to stay open with.
+
+    Uses the last-known state rather than a fresh read: quitting must never crash
+    on a comms blip, and output_enabled is kept current by the poller and by
+    _set_output above. Unknown (None) prompts just like ON."""
+    if output_enabled is False:
+        return None
+    question = "Output is ON." if output_enabled else "Output state UNKNOWN."
     stdscr.nodelay(False)
     try:
-        _safe_addstr(stdscr, 0, 0, "Output is ON. Disable it before quitting? (y/n): ")
+        _safe_addstr(stdscr, 0, 0, f"{question} Disable it before quitting? (y/n): ")
         stdscr.refresh()
         ch = stdscr.getch()
     finally:
@@ -652,8 +672,29 @@ def _maybe_disable_on_quit(stdscr: curses.window, device: Device, output_enabled
         try:
             with device.lock:
                 device.psu.output_enabled = False
-        except HM310TError:
-            pass  # comms may already be down; the front panel is the last resort
+                device.poller.output_enabled = False
+        except HM310TError as exc:
+            # Don't quit as if it worked: stay open so the user knows. Quitting
+            # again and answering 'n' still leaves; the front panel is the last resort.
+            with device.lock:
+                device.poller.output_enabled = None
+            return f"Disable FAILED ({exc}) -- output may still be ON"
+    return None
+
+
+def _force_output_off(lock: threading.Lock, psu: PowerSupply) -> None:
+    """Best-effort output-off for abnormal exits. A repeated Ctrl-C (e.g. while
+    waiting for the poller to release the lock) retries instead of aborting the
+    write; after a few, give up so the process can still be killed."""
+    for _ in range(3):
+        try:
+            with lock:
+                psu.output_enabled = False
+            return
+        except KeyboardInterrupt:
+            continue
+        except Exception:
+            return  # comms may be dead; the device's front panel is the last resort
 
 
 def _connect(stdscr: curses.window) -> PowerSupply | None:
@@ -674,6 +715,65 @@ def _connect(stdscr: curses.window) -> PowerSupply | None:
             if stdscr.getch() == ord("q"):
                 return None
             time.sleep(4)
+
+
+def _sync_from_poller(
+    state: PanelState, device: Device, last_known: bool | None, now: float
+) -> PanelState:
+    """Copies the poller's latest reading into ``state`` and reacts to output edges.
+
+    ``last_known`` is the last output state that was actually KNOWN (never None
+    unless nothing has been read yet). Edges compare against it, not against the
+    previous tick, so an unknown stretch (a failed write) that ends where it
+    started -- ON -> unknown -> ON -- is not mistaken for a fresh enable."""
+    poller = device.poller
+    state = replace(
+        state,
+        values=poller.values,
+        measurement=poller.measurement,
+        protection=poller.protection,
+        output_enabled=poller.output_enabled,
+        peak_voltage=poller.peak_voltage,
+        peak_current=poller.peak_current,
+        avg_voltage=poller.avg_voltage,
+        avg_current=poller.avg_current,
+    )
+    if poller.error is not None:
+        return replace(state, status=f"Communication error: {poller.error}")
+    if state.output_enabled is None or state.output_enabled == last_known:
+        return state
+    if last_known is None:
+        # First successful read after an unreadable startup -- same rule as
+        # _initial_enabled_at: if it's already on, the timer starts from now.
+        if state.output_enabled and state.enabled_at is None:
+            return replace(
+                state,
+                enabled_at=now,
+                status="Output is ON -- timer starts from now, not the true total.",
+            )
+        return state
+    # Output changed without going through _set_output (the front panel, or
+    # another Modbus client) -- _set_output already set a more precise timestamp
+    # and reset headroom when WE trigger the change, so this only fires for a
+    # change this panel didn't just make itself.
+    if state.output_enabled:
+        with device.lock:
+            poller.reset_headroom()
+        return replace(
+            state,
+            enabled_at=now,
+            disabled_at=None,
+            peak_voltage=0.0,
+            peak_current=0.0,
+            avg_voltage=0.0,
+            avg_current=0.0,
+            status="Output enabled (detected externally -- front panel?)",
+        )
+    return replace(
+        state,
+        disabled_at=now,
+        status="Output disabled (detected externally -- front panel?)",
+    )
 
 
 def main(stdscr: curses.window) -> None:
@@ -726,64 +826,29 @@ def main(stdscr: curses.window) -> None:
         # Initialization can block on serial I/O too. It needs the same fail-safe
         # teardown as the event loop, even though the poller may not have started.
         try:
-            with lock:
-                psu.output_enabled = False
-        except Exception:
-            pass
+            _force_output_off(lock, psu)
         finally:
             if poller_started:
                 poller.stop()
             psu.close()
         raise
 
+    last_known = state.output_enabled
     try:
         while True:
-            was_enabled = state.output_enabled
-            state = replace(
-                state,
-                values=poller.values,
-                measurement=poller.measurement,
-                protection=poller.protection,
-                output_enabled=poller.output_enabled,
-                peak_voltage=poller.peak_voltage,
-                peak_current=poller.peak_current,
-                avg_voltage=poller.avg_voltage,
-                avg_current=poller.avg_current,
-            )
-            if poller.error is not None:
-                state = replace(state, status=f"Communication error: {poller.error}")
-            elif state.output_enabled != was_enabled:
-                # Output changed without going through _set_output below (the front
-                # panel, or another Modbus client) -- _set_output already set a more
-                # precise timestamp and reset headroom when WE trigger the change,
-                # so this only fires for a change this panel didn't just make itself.
-                now = time.monotonic()
-                if state.output_enabled:
-                    with lock:
-                        poller.reset_headroom()
-                    state = replace(
-                        state,
-                        enabled_at=now,
-                        disabled_at=None,
-                        peak_voltage=0.0,
-                        peak_current=0.0,
-                        avg_voltage=0.0,
-                        avg_current=0.0,
-                        status="Output enabled (detected externally -- front panel?)",
-                    )
-                else:
-                    state = replace(
-                        state,
-                        disabled_at=now,
-                        status="Output disabled (detected externally -- front panel?)",
-                    )
+            if state.output_enabled is not None:
+                last_known = state.output_enabled
+            state = _sync_from_poller(state, device, last_known, time.monotonic())
 
             _draw(stdscr, state, styles, time.monotonic())
 
             key = stdscr.getch()
             if key == ord("q"):
-                _maybe_disable_on_quit(stdscr, device, state.output_enabled)
-                break
+                problem = _maybe_disable_on_quit(stdscr, device, state.output_enabled)
+                if problem is None:
+                    break
+                state = replace(state, output_enabled=None, status=problem)
+                continue
             if key != -1:
                 state = _handle_key(state, device, key, stdscr)
 
@@ -793,11 +858,7 @@ def main(stdscr: curses.window) -> None:
         # Abnormal exit (Ctrl-C, a comms error mid-loop): fail safe -- never leave
         # the output energized with no in-process way to disable it. The deliberate
         # 'q' quit path above is a normal return, so it keeps its leave-on choice.
-        try:
-            with lock:
-                psu.output_enabled = False
-        except Exception:
-            pass  # comms may be dead; the device's front panel is the last resort
+        _force_output_off(lock, psu)
         raise
     finally:
         poller.stop()
